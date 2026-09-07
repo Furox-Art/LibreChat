@@ -532,6 +532,29 @@ const initializeClient = async ({
   /** @type {Array<import('librechat-data-provider').TTokenUsageEvent>} */
   const usageEmitSink = [];
 
+  const requestedProjectId =
+    endpointOption.chatProjectId !== undefined
+      ? endpointOption.chatProjectId
+      : req.body?.chatProjectId;
+  const hasResolvedProjectContext = Object.prototype.hasOwnProperty.call(req, 'chatProjectContext');
+  const chatProjectContextPromise = hasResolvedProjectContext
+    ? Promise.resolve(req.chatProjectContext)
+    : requestConversationPromise.then((resolvedConversation) =>
+        resolveChatProjectContext(
+          {
+            userId: req.user.id,
+            tenantId: req.user.tenantId,
+            conversationId,
+            requestedProjectId,
+            resolvedConversation,
+          },
+          {
+            getConvo: db.getConvo,
+            getChatProject: db.getChatProject,
+          },
+        ),
+      );
+
   const [
     memoryAvailable,
     accessibleSkillIds,
@@ -540,6 +563,7 @@ const initializeClient = async ({
     { skillStates, defaultActiveOnShare },
     { primaryAgent, modelsConfig },
     requestConversation,
+    chatProjectContext,
     toolRoleGrants,
   ] = await Promise.all([
     memoryAvailablePromise,
@@ -549,28 +573,9 @@ const initializeClient = async ({
     skillStatesPromise,
     validatedPrimaryAgentPromise,
     requestConversationPromise,
+    chatProjectContextPromise,
     toolRoleGrantsPromise,
   ]);
-  const requestedProjectId =
-    endpointOption.chatProjectId !== undefined
-      ? endpointOption.chatProjectId
-      : req.body?.chatProjectId;
-  const hasResolvedProjectContext = Object.prototype.hasOwnProperty.call(req, 'chatProjectContext');
-  const chatProjectContext = hasResolvedProjectContext
-    ? req.chatProjectContext
-    : await resolveChatProjectContext(
-        {
-          userId: req.user.id,
-          tenantId: req.user.tenantId,
-          conversationId,
-          requestedProjectId,
-          resolvedConversation: requestConversation,
-        },
-        {
-          getConvo: db.getConvo,
-          getChatProject: db.getChatProject,
-        },
-      );
   req.chatProjectContext = chatProjectContext;
   req.chatProjectContextEnabled = true;
 
