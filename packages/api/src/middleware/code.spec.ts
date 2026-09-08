@@ -32,8 +32,11 @@ describe('code environment limiters', () => {
       CODE_ENVIRONMENT_STATUS_IP_MAX: '2',
     });
     jest.isolateModules(() => {
-      ({ codeEnvironmentPairingLimiter, codeEnvironmentStatusIpLimiter, codeEnvironmentStatusLimiter } =
-        jest.requireActual<typeof CodeMiddleware>('./code'));
+      ({
+        codeEnvironmentPairingLimiter,
+        codeEnvironmentStatusIpLimiter,
+        codeEnvironmentStatusLimiter,
+      } = jest.requireActual<typeof CodeMiddleware>('./code'));
     });
   });
 
