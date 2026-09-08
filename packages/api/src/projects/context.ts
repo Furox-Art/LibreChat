@@ -1,14 +1,16 @@
 import type { IChatProject, IConversation } from '@librechat/data-schemas';
-
+import type { CanonicalProjectResource, GetProjectFiles } from './resources';
 import { PARTIAL_RESOLVED_CONVERSATION } from '../agents/conversationSymbols';
+import { resolveChatProjectResources } from './resources';
 
 export interface ResolvedChatProjectContext {
   projectId: string;
   contextRevision: number;
   instructions: string;
   file_ids: string[];
+  /** Owner-scoped canonical file metadata, with no extracted content. */
+  resources: readonly CanonicalProjectResource[];
 }
-
 type ConversationSnapshot = Partial<IConversation> & {
   conversationId?: string;
   chatProjectId?: string | null;
@@ -32,6 +34,7 @@ export interface ResolveChatProjectContextInput {
 export interface ResolveChatProjectContextDeps {
   getConvo: (userId: string, conversationId: string) => Promise<ConversationSnapshot | null>;
   getChatProject: (userId: string, projectId: string) => Promise<ProjectSnapshot | null>;
+  getFiles: GetProjectFiles;
 }
 
 export const CHAT_PROJECT_CONTEXT_UNAVAILABLE = 'Project context unavailable';
@@ -105,6 +108,15 @@ export async function resolveChatProjectContext(
     typeof project._id === 'string' && project._id !== ''
       ? project._id
       : (project._id?.toString() ?? projectId);
+  const file_ids = Array.isArray(project.file_ids)
+    ? project.file_ids.filter((fileId): fileId is string => typeof fileId === 'string')
+    : [];
+  const resources = await resolveChatProjectResources({
+    project: { file_ids },
+    userId,
+    tenantId: tenantId ?? undefined,
+    getFiles: deps.getFiles,
+  });
   return {
     projectId: projectIdFromRecord,
     contextRevision:
@@ -112,9 +124,8 @@ export async function resolveChatProjectContext(
         ? project.contextRevision
         : 0,
     instructions: typeof project.instructions === 'string' ? project.instructions : '',
-    file_ids: Array.isArray(project.file_ids)
-      ? project.file_ids.filter((fileId): fileId is string => typeof fileId === 'string')
-      : [],
+    file_ids,
+    resources,
   };
 }
 
@@ -124,7 +135,13 @@ export function getChatProjectContextKey(
   if (context == null) {
     return 'chat-project:none';
   }
-  return `chat-project:${context.projectId}:${context.contextRevision}:${JSON.stringify(context.file_ids)}`;
+  const resourceKey = context.resources.map((resource) => [
+    resource.file_id,
+    resource.identity,
+    resource.availability,
+    resource.version,
+  ]);
+  return `chat-project:${context.projectId}:${context.contextRevision}:${JSON.stringify(context.file_ids)}:${JSON.stringify(resourceKey)}`;
 }
 
 export function formatChatProjectInstructions(

@@ -845,8 +845,10 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
     const query: FilterQuery<IMongoFile> = user
       ? withOwnerScope({ file_id }, { userId: user, tenantId })
       : { file_id };
+    /** Usage and temporary-upload cleanup are bookkeeping, not content writes. */
     return File.findOneAndUpdate(query, updateOperation, {
       new: true,
+      timestamps: false,
     }).lean<IMongoFile>();
   }
 

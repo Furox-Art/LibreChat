@@ -62,6 +62,7 @@ export default function ProjectWorkspace() {
   const titleButtonRef = useRef<HTMLButtonElement>(null);
   const descriptionButtonRef = useRef<HTMLButtonElement>(null);
   const deleteMenuRef = useRef<HTMLButtonElement>(null);
+  const instructionsButtonRef = useRef<HTMLButtonElement>(null);
   const { data: project, isLoading: isProjectLoading } = useProjectQuery(projectId);
   const { data: startupConfig } = useGetStartupConfig();
   const isRagEnabled = startupConfig?.ragEnabled === true;
@@ -274,6 +275,7 @@ export default function ProjectWorkspace() {
           open={isInstructionsOpen}
           onOpenChange={setIsInstructionsOpen}
           project={project}
+          triggerRef={instructionsButtonRef}
         />
         <div
           className={cn('mt-6 grid min-w-0 auto-rows-fr gap-4', isRagEnabled && 'lg:grid-cols-2')}
@@ -306,6 +308,7 @@ export default function ProjectWorkspace() {
                 />
               </div>
               <Button
+                ref={instructionsButtonRef}
                 type="button"
                 variant="ghost"
                 size="sm"

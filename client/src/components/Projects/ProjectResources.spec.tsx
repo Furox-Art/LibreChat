@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import ProjectResources from './ProjectResources';
 
 const mockUploadMutateAsync = jest.fn();
+const mockCanUseFileSearch = jest.fn(() => true);
 const mockAddMutateAsync = jest.fn();
 const mockRemoveMutateAsync = jest.fn();
 const mockRefetch = jest.fn();
@@ -78,8 +79,13 @@ jest.mock('~/data-provider', () => ({
 }));
 
 jest.mock('~/hooks', () => ({
+  useAgentCapabilities: () => ({ fileSearchEnabled: true }),
+  useGetAgentsConfig: () => ({ agentsConfig: { capabilities: ['file_search'] } }),
+  useHasAccess: () => mockCanUseFileSearch(),
   useLocalize: () => (key: string, options?: { count?: number; name?: string }) => {
     const translations: Record<string, string> = {
+      com_error_files_upload: 'An error occurred while uploading the file.',
+      com_error_files_upload_canceled: 'The file upload was canceled.',
       com_ui_project_add_files: 'Add files',
       com_ui_project_files: 'Reference files',
       com_ui_project_files_help: 'Files are searched',
@@ -141,6 +147,7 @@ describe('ProjectResources', () => {
       isError: false,
       refetch: mockRefetch,
     };
+    mockCanUseFileSearch.mockReturnValue(true);
     mockAddMutateAsync.mockResolvedValue({});
     mockRemoveMutateAsync.mockResolvedValue({});
   });
@@ -182,9 +189,15 @@ describe('ProjectResources', () => {
     );
     await waitFor(() => expect(screen.queryByText('Processing')).not.toBeInTheDocument());
 
-    mockUploadMutateAsync.mockRejectedValueOnce(new Error('upload failed'));
+    mockUploadMutateAsync.mockRejectedValueOnce({
+      message: 'unsafe internal upload detail',
+      response: { data: { message: 'Images are not supported for File Search.' } },
+    });
     fireEvent.change(input, { target: { files: [new File(['y'], 'failed.txt')] } });
-    await waitFor(() => expect(screen.getByText('Upload failed')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText('Images are not supported for File Search.')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('unsafe internal upload detail')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Dismiss failed.txt upload' })).toBeInTheDocument();
   });
   it('reserves remaining capacity across overlapping multi-file selections', async () => {
@@ -266,5 +279,30 @@ describe('ProjectResources', () => {
     await user.click(screen.getByRole('button', { name: 'Add files' }));
     await user.click(screen.getByRole('menuitem', { name: 'Choose an existing file' }));
     expect(await screen.findByRole('button', { name: /ready.txt/ })).toHaveTextContent('12.5 KB');
+  });
+
+  it('keeps eligible existing files available when device upload is denied', async () => {
+    mockCanUseFileSearch.mockReturnValue(false);
+    mockAvailableFilesState = {
+      ...mockAvailableFilesState,
+      data: {
+        pages: [
+          {
+            files: [{ ...uploadedFile, file_id: 'ready-id', filename: 'ready.txt' }] as TFile[],
+            nextCursor: null,
+          },
+        ],
+      },
+    };
+    renderResources();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Add files' }));
+    expect(screen.queryByRole('menuitem', { name: 'Upload file' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('menuitem', { name: 'Choose an existing file' }));
+    await user.click(await screen.findByRole('button', { name: /ready.txt/ }));
+    expect(mockAddMutateAsync).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      file_id: 'ready-id',
+    });
   });
 });

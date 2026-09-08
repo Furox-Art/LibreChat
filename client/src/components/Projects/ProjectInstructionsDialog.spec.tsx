@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { TChatProject } from 'librechat-data-provider';
 import type * as ReactModule from 'react';
 import type { ReactNode } from 'react';
@@ -26,23 +26,59 @@ jest.mock('@librechat/client', () => {
       title,
       main,
       buttons,
+      showCancelButton = true,
+      cancelDisabled = false,
     }: {
       title: ReactNode;
       main: ReactNode;
       buttons: ReactNode;
+      showCancelButton?: boolean;
+      cancelDisabled?: boolean;
     }) =>
       React.createElement('section', { role: 'dialog' }, [
         React.createElement('h2', { key: 'title' }, title),
         React.createElement('div', { key: 'main' }, main),
+        showCancelButton
+          ? React.createElement(
+              'button',
+              { key: 'cancel', type: 'button', disabled: cancelDisabled },
+              'Cancel',
+            )
+          : null,
         React.createElement('div', { key: 'buttons' }, buttons),
       ]),
     useToastContext: () => ({ showToast: jest.fn() }),
   };
 });
 
-jest.mock('~/data-provider', () => ({
-  useUpdateProjectMutation: () => ({ mutate: mockMutate, isLoading: false }),
-}));
+jest.mock('~/data-provider', () => {
+  const React = jest.requireActual<typeof ReactModule>('react');
+  return {
+    useUpdateProjectMutation: () => {
+      const [isLoading, setIsLoading] = React.useState(false);
+      const mutate = (
+        payload: unknown,
+        callbacks: {
+          onSuccess?: (...args: unknown[]) => void;
+          onError?: (...args: unknown[]) => void;
+        },
+      ) => {
+        setIsLoading(true);
+        mockMutate(payload, {
+          onSuccess: (...args: unknown[]) => {
+            setIsLoading(false);
+            callbacks.onSuccess?.(...args);
+          },
+          onError: (...args: unknown[]) => {
+            setIsLoading(false);
+            callbacks.onError?.(...args);
+          },
+        });
+      };
+      return { mutate, isLoading };
+    },
+  };
+});
 
 jest.mock('~/hooks', () => ({
   useLocalize: () => (key: string, options?: { name?: string | number }) => {
@@ -52,6 +88,8 @@ jest.mock('~/hooks', () => ({
       com_ui_project_instructions_help: 'Additional context',
       com_ui_project_instructions_error: 'Could not save project instructions',
       com_ui_save: 'Save',
+      com_ui_saving: 'Saving',
+      com_ui_cancel: 'Cancel',
     };
     return (translations[key] ?? key).replace('{{name}}', String(options?.name ?? ''));
   },
@@ -88,5 +126,50 @@ describe('ProjectInstructionsDialog', () => {
     mockMutate.mockImplementationOnce((_payload, callbacks) => callbacks.onSuccess(project));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('protects the draft and dismissal controls while a save is pending', async () => {
+    let pendingCallbacks: { onSuccess: () => void; onError: (error: unknown) => void } | undefined;
+    mockMutate.mockImplementationOnce((_payload, callbacks) => {
+      pendingCallbacks = callbacks;
+    });
+
+    render(<ProjectInstructionsDialog open onOpenChange={jest.fn()} project={project} />);
+    const textarea = screen.getByRole('textbox', { name: 'Workspace instructions' });
+    fireEvent.change(textarea, { target: { value: 'Draft A' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+    expect(textarea).toHaveAttribute('readonly');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+
+    await act(async () => pendingCallbacks?.onError(new Error('Save unavailable')));
+    await waitFor(() => expect(textarea).not.toHaveAttribute('readonly'));
+    expect(screen.getByRole('button', { name: 'Cancel' })).not.toBeDisabled();
+    expect(textarea).toHaveValue('Draft A');
+  });
+
+  it('does not close a newer editing session when an old save completes', async () => {
+    let pendingCallbacks: { onSuccess: () => void; onError: (error: unknown) => void } | undefined;
+    mockMutate.mockImplementationOnce((_payload, callbacks) => {
+      pendingCallbacks = callbacks;
+    });
+
+    const onOpenChange = jest.fn();
+    const dialog = (open: boolean) => (
+      <ProjectInstructionsDialog open={open} onOpenChange={onOpenChange} project={project} />
+    );
+    const { rerender } = render(dialog(true));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workspace instructions' }), {
+      target: { value: 'Draft A' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+
+    rerender(dialog(false));
+    rerender(dialog(true));
+    await act(async () => pendingCallbacks?.onSuccess());
+
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 });

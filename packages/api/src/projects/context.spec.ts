@@ -1,3 +1,4 @@
+import type { CanonicalProjectResource } from './resources';
 import { getChatProjectContextKey, resolveChatProjectContext } from './context';
 import { PARTIAL_RESOLVED_CONVERSATION } from '../agents/conversationSymbols';
 
@@ -7,6 +8,15 @@ const project = {
   contextRevision: 3,
   file_ids: ['file-a'],
 };
+const getFiles = jest.fn().mockResolvedValue([]);
+
+const missingResources = (fileIds: string[]): CanonicalProjectResource[] =>
+  fileIds.map((file_id) => ({
+    file_id,
+    identity: 'missing',
+    availability: 'unavailable',
+    version: 'missing',
+  }));
 
 describe('resolveChatProjectContext', () => {
   it('uses existing conversation membership over a request project override', async () => {
@@ -18,7 +28,7 @@ describe('resolveChatProjectContext', () => {
         requestedProjectId: 'project-b',
         resolvedConversation: { conversationId: 'conversation-a', chatProjectId: 'project-a' },
       },
-      { getConvo: jest.fn(), getChatProject },
+      { getConvo: jest.fn(), getChatProject, getFiles },
     );
 
     expect(context?.projectId).toBe('project-a');
@@ -36,7 +46,7 @@ describe('resolveChatProjectContext', () => {
           requestedProjectId: 'project-a',
           resolvedConversation: { conversationId: 'conversation-a', chatProjectId: null },
         },
-        { getConvo: jest.fn(), getChatProject },
+        { getConvo: jest.fn(), getChatProject, getFiles },
       ),
     ).resolves.toBeNull();
     expect(getChatProject).not.toHaveBeenCalled();
@@ -51,7 +61,7 @@ describe('resolveChatProjectContext', () => {
           requestedProjectId: 'project-a',
           resolvedConversation: { conversationId: 'conversation-a' },
         },
-        { getConvo: jest.fn(), getChatProject: jest.fn().mockResolvedValue(project) },
+        { getConvo: jest.fn(), getChatProject: jest.fn().mockResolvedValue(project), getFiles },
       ),
     ).resolves.toBeNull();
   });
@@ -74,6 +84,7 @@ describe('resolveChatProjectContext', () => {
           chatProjectId: 'project-a',
         }),
         getChatProject: jest.fn().mockResolvedValue(project),
+        getFiles,
       },
     );
     expect(context?.projectId).toBe('project-a');
@@ -87,6 +98,7 @@ describe('resolveChatProjectContext', () => {
           {
             getConvo: jest.fn(),
             getChatProject: jest.fn().mockResolvedValue({ ...project, tenantId: projectTenant }),
+            getFiles,
           },
         ),
       ).rejects.toThrow('Project context unavailable');
@@ -97,7 +109,7 @@ describe('resolveChatProjectContext', () => {
     await expect(
       resolveChatProjectContext(
         { userId: 'user-a', requestedProjectId: 'project-a' },
-        { getConvo: jest.fn(), getChatProject: jest.fn().mockResolvedValue(null) },
+        { getConvo: jest.fn(), getChatProject: jest.fn().mockResolvedValue(null), getFiles },
       ),
     ).rejects.toThrow('Project context unavailable');
   });
@@ -108,12 +120,14 @@ describe('resolveChatProjectContext', () => {
       contextRevision: 1,
       instructions: 'secret one',
       file_ids: ['file-a'],
+      resources: missingResources(['file-a']),
     });
     const second = getChatProjectContextKey({
       projectId: 'project-a',
       contextRevision: 2,
       instructions: 'secret two',
       file_ids: ['file-b'],
+      resources: missingResources(['file-b']),
     });
 
     expect(first).not.toContain('secret');
@@ -126,12 +140,14 @@ describe('resolveChatProjectContext', () => {
       contextRevision: 1,
       instructions: '',
       file_ids: ['a', 'b,c'],
+      resources: missingResources(['a', 'b,c']),
     });
     const second = getChatProjectContextKey({
       projectId: 'project-a',
       contextRevision: 1,
       instructions: '',
       file_ids: ['a,b', 'c'],
+      resources: missingResources(['a,b', 'c']),
     });
 
     expect(first).not.toBe(second);

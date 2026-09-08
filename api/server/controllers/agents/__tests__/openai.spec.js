@@ -1239,6 +1239,34 @@ describe('OpenAIChatCompletionController', () => {
       expect(getConvo).toHaveBeenCalledWith('user-123', 'convo-abc');
       expect(res.status).toHaveBeenCalledWith(404);
     });
+    it('rechecks conversation existence after enrollment before initializing a provider', async () => {
+      const api = require('@librechat/api');
+      const models = require('~/models');
+      api.validateRequest.mockReturnValueOnce({
+        request: {
+          model: 'agent-123',
+          messages: [{ role: 'user', content: 'Hello' }],
+          stream: false,
+          conversation_id: 'convo-abc',
+        },
+      });
+      let deleted = false;
+      models.getConvo.mockImplementation(async () =>
+        deleted ? null : { conversationId: 'convo-abc', user: 'user-123' },
+      );
+      mockEnrollAgentExecution.mockImplementationOnce(async () => {
+        deleted = true;
+        return mockExecution;
+      });
+
+      await OpenAIChatCompletionController(req, res);
+
+      expect(mockEnrollAgentExecution).toHaveBeenCalledTimes(1);
+      expect(api.initializeAgent).not.toHaveBeenCalled();
+      expect(api.createRun).not.toHaveBeenCalled();
+      expect(mockProcessStream).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
 
     it('should proceed when conversation is owned by user', async () => {
       const { validateRequest } = require('@librechat/api');

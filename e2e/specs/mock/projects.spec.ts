@@ -263,6 +263,7 @@ test.describe('chat projects', () => {
       .fill(`Always follow ${guidance} when answering.`);
     await instructionsDialog.getByRole('button', { name: 'Save' }).click();
     await expect(instructionsDialog).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Edit instructions' })).toBeFocused();
     await page.goto(`/c/new?projectId=${projectId}`, { timeout: 10000 });
     await selectMockEndpoint(page, MOCK_ENDPOINTS[0]);
     await sendMessage(page, `E2E_ASSERT_PROJECT_CONTEXT:${guidance}`);

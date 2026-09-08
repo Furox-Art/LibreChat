@@ -283,16 +283,24 @@ const chatV1 = async (req, res) => {
         requestedProjectId: endpointOption?.chatProjectId ?? req.body?.chatProjectId,
         resolvedConversation: existingConversation,
       },
-      { getConvo, getChatProject },
+      { getConvo, getChatProject, getFiles },
     );
     const projectInstructions = formatChatProjectInstructions(projectContext);
     req.chatProjectContext = projectContext;
     if (projectInstructions) {
-      assertModelBoundContent({
-        filters: req.config?.filters,
-        legacyPii: req.config?.messageFilter?.pii,
-        agents: [{ instructions: projectInstructions }],
-      });
+      try {
+        assertModelBoundContent({
+          filters: req.config?.filters,
+          legacyPii: req.config?.messageFilter?.pii,
+          agents: [{ instructions: projectInstructions }],
+        });
+      } catch (error) {
+        if (!isContentFilterError(error)) {
+          throw error;
+        }
+        contentRejected = true;
+        return res.status(error.statusCode).json(error.body);
+      }
     }
 
     if (convoId && !_thread_id) {

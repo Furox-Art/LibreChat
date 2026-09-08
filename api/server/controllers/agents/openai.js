@@ -280,55 +280,9 @@ const executeOpenAIChatCompletion = async (envelope, { req, res }) => {
   // Request-backed tool adapters still observe the validated envelope payload;
   // shared initialization receives the transport-free runtime below.
   req.body = request;
-  let resolvedConversation;
-  if (request.conversation_id != null) {
-    if (typeof request.conversation_id !== 'string') {
-      return sendErrorResponse(
-        res,
-        400,
-        'conversation_id must be a string',
-        'invalid_request_error',
-      );
-    }
-    try {
-      resolvedConversation = await db.getConvo(principal.userId, request.conversation_id);
-      if (!resolvedConversation) {
-        return sendErrorResponse(res, 404, 'Conversation not found', 'invalid_request_error');
-      }
-      req.resolvedConversation = resolvedConversation;
-      req.chatProjectContext = await resolveChatProjectContext(
-        {
-          userId: principal.userId,
-          tenantId: principal.tenantId,
-          conversationId: request.conversation_id,
-          resolvedConversation,
-        },
-        { getConvo: db.getConvo, getChatProject: db.getChatProject },
-      );
-    } catch (error) {
-      logger.error(
-        '[OpenAI API] Conversation context resolution failed',
-        getSafeErrorMetadata(error),
-      );
-      return sendErrorResponse(
-        res,
-        error?.message === 'Project context unavailable' ? 404 : 500,
-        'Conversation context unavailable',
-        'server_error',
-      );
-    }
+  if (request.conversation_id != null && typeof request.conversation_id !== 'string') {
+    return sendErrorResponse(res, 400, 'conversation_id must be a string', 'invalid_request_error');
   }
-  req.turnStartedAt = envelope.receivedAt;
-  const agentRuntime = createAgentExecutionContext({
-    user: req.user,
-    appConfig,
-    requestBody: request,
-    turnStartedAt: envelope.receivedAt,
-    conversationCreatedAt: req.conversationCreatedAt,
-    resolvedConversation: req.resolvedConversation,
-    hasResolvedConversation: Object.prototype.hasOwnProperty.call(req, 'resolvedConversation'),
-    chatProjectContext: req.chatProjectContext,
-  });
   const agentId = request.model;
   const manualSkills = extractManualSkills(req.body);
 
@@ -404,18 +358,6 @@ const executeOpenAIChatCompletion = async (envelope, { req, res }) => {
     );
   }
 
-  // Look up the agent
-  const agent = await db.getAgent({ id: agentId });
-  if (!agent) {
-    return sendErrorResponse(
-      res,
-      404,
-      `Agent not found: ${agentId}`,
-      'invalid_request_error',
-      'model_not_found',
-    );
-  }
-
   const responseId = `chatcmpl-${nanoid()}`;
   const created = Math.floor(Date.now() / 1000);
 
@@ -471,6 +413,60 @@ const executeOpenAIChatCompletion = async (envelope, { req, res }) => {
     },
     handleExecutionError: (error) => handleExecutionError({ error, res, context, appConfig }),
     execute: async (execution) => {
+      let resolvedConversation;
+      if (request.conversation_id != null) {
+        try {
+          resolvedConversation = await db.getConvo(principal.userId, request.conversation_id);
+          if (!resolvedConversation) {
+            return sendErrorResponse(res, 404, 'Conversation not found', 'invalid_request_error');
+          }
+          req.resolvedConversation = resolvedConversation;
+          req.chatProjectContext = await resolveChatProjectContext(
+            {
+              userId: principal.userId,
+              tenantId: principal.tenantId,
+              conversationId: request.conversation_id,
+              resolvedConversation,
+            },
+            { getConvo: db.getConvo, getChatProject: db.getChatProject, getFiles: db.getFiles },
+          );
+        } catch (error) {
+          logger.error(
+            '[OpenAI API] Conversation context resolution failed',
+            getSafeErrorMetadata(error),
+          );
+          return sendErrorResponse(
+            res,
+            error?.message === 'Project context unavailable' ? 404 : 500,
+            'Conversation context unavailable',
+            'server_error',
+          );
+        }
+      }
+
+      const agent = await db.getAgent({ id: agentId });
+      if (!agent) {
+        return sendErrorResponse(
+          res,
+          404,
+          `Agent not found: ${agentId}`,
+          'invalid_request_error',
+          'model_not_found',
+        );
+      }
+
+      req.turnStartedAt = envelope.receivedAt;
+      const agentRuntime = createAgentExecutionContext({
+        user: req.user,
+        appConfig,
+        requestBody: request,
+        turnStartedAt: envelope.receivedAt,
+        conversationCreatedAt: req.conversationCreatedAt,
+        resolvedConversation: req.resolvedConversation,
+        hasResolvedConversation: Object.prototype.hasOwnProperty.call(req, 'resolvedConversation'),
+        chatProjectContext: req.chatProjectContext,
+      });
+
       const parentMessageId = request.parent_message_id ?? null;
       let mcpParentMessageId;
       if (

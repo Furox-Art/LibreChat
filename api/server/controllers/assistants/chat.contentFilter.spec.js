@@ -274,6 +274,35 @@ describe.each([
     expect(mockRetrieveAssistant).toHaveBeenCalledWith('asst-1');
     expect(mockListThreadMessages).not.toHaveBeenCalled();
   });
+  it('blocks project guidance before provider, thread, message, run, or stream side effects', async () => {
+    req.config.filters = {
+      agentInstructions: {
+        pii: {
+          fields: ['instructions'],
+          starterPatterns: [],
+          customPatterns: [
+            {
+              id: 'private',
+              label: 'private value',
+              regex: 'PRIVATE-[A-Z]+',
+            },
+          ],
+        },
+      },
+    };
+    mockResolveChatProjectContext.mockResolvedValueOnce({
+      projectId: '507f1f77bcf86cd799439012',
+      contextRevision: 1,
+      instructions: 'Project guidance PRIVATE-INSTRUCTION',
+      file_ids: [],
+    });
+
+    await expectRawFreeRejection('PRIVATE-INSTRUCTION', 'agent_instruction', 'instructions');
+
+    expect(mockResolveChatProjectContext).toHaveBeenCalledTimes(1);
+    expect(mockGetOpenAIClient).not.toHaveBeenCalled();
+    expect(mockValidateAuthor).not.toHaveBeenCalled();
+  });
 
   it('blocks paged historical user text before thread, message, run, or stream side effects', async () => {
     req.config.filters = {

@@ -142,8 +142,11 @@ export const useAddProjectFileMutation = (): UseMutationResult<
     ({ projectId, file_id }: ProjectFileMutationVariables) =>
       dataService.addProjectFile({ projectId, file_id }),
     {
-      onSuccess: (project, variables) => {
-        queryClient.setQueryData([QueryKeys.project, variables.projectId], project);
+      onSuccess: (_project, variables) => {
+        queryClient.invalidateQueries({
+          queryKey: [QueryKeys.project, variables.projectId],
+          refetchType: 'all',
+        });
         queryClient.invalidateQueries([QueryKeys.projectFiles, variables.projectId]);
         queryClient.invalidateQueries([QueryKeys.projectAvailableFiles, variables.projectId]);
         queryClient.invalidateQueries([QueryKeys.projects]);
@@ -163,8 +166,11 @@ export const useRemoveProjectFileMutation = (): UseMutationResult<
     ({ projectId, file_id }: ProjectFileMutationVariables) =>
       dataService.removeProjectFile({ projectId, file_id }),
     {
-      onSuccess: (project, variables) => {
-        queryClient.setQueryData([QueryKeys.project, variables.projectId], project);
+      onSuccess: (_project, variables) => {
+        queryClient.invalidateQueries({
+          queryKey: [QueryKeys.project, variables.projectId],
+          refetchType: 'all',
+        });
         queryClient.invalidateQueries([QueryKeys.projectFiles, variables.projectId]);
         queryClient.invalidateQueries([QueryKeys.projectAvailableFiles, variables.projectId]);
         queryClient.invalidateQueries([QueryKeys.projects]);

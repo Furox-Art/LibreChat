@@ -57,6 +57,7 @@ import type { ContentTraversalLimitError } from '../protection/adapters/nested';
 import type { SkillContentInput } from '../protection/adapters/submissions';
 import type { ResolvedChatProjectContext } from '../projects/context';
 import type { TextContentFragment } from '../protection/types';
+import type { GetProjectFiles } from '../projects/resources';
 import type { MCPToolAlias } from '~/tools/classification';
 import type { AgentExecutionContext } from './runtime';
 import {
@@ -68,6 +69,12 @@ import {
   unionPrimeAllowedTools,
   MAX_PRIMED_SKILLS_PER_TURN,
 } from './skills';
+import {
+  resolveChatProjectFiles,
+  resolveChatProjectPolicyFiles,
+  toCanonicalProjectResource,
+  toRuntimeFile,
+} from '../projects/resources';
 import {
   getContentTraversalFragments,
   isContentTraversalProtected,
@@ -110,10 +117,10 @@ import { registerMemoryTools, memoryToolUsageGuard } from './memory';
 import { formatChatProjectInstructions } from '../projects/context';
 import { applyIntentLabels, sanitizeIntentLabels } from './intent';
 import { ContentFilterError } from '../middleware/contentFilter';
-import { resolveChatProjectFiles } from '../projects/resources';
 import { createRequestAgentExecutionContext } from './runtime';
 import { filterFilesByEndpointRuntimeConfig } from '~/files';
 import { hasActiveFileFieldPolicy } from '~/protection';
+import { hasActiveFilePolicy } from '../protection/files';
 import { applyBackgroundToolCalls } from './background';
 import { generateArtifactsPrompt } from '~/prompts';
 import { getProviderConfig } from '~/endpoints';
@@ -306,6 +313,53 @@ function addProjectFilesToFileSearch(
       files: currentFiles.concat(projectFiles),
     },
   };
+}
+
+async function resolveRuntimeProjectFiles({
+  context,
+  scope,
+  getFiles,
+  filters,
+}: {
+  context: ResolvedChatProjectContext;
+  scope: FileOwnerScope;
+  getFiles: GetProjectFiles;
+  filters?: AppConfig['filters'];
+}): Promise<TFile[]> {
+  const files = await resolveChatProjectFiles({
+    project: context,
+    resources: context.resources,
+    userId: scope.userId,
+    tenantId: scope.tenantId ?? undefined,
+    getFiles,
+  });
+  if (!hasActiveFilePolicy(filters) || files.length === 0) {
+    return files;
+  }
+  const policyFiles = await resolveChatProjectPolicyFiles({
+    project: { file_ids: files.map((file) => file.file_id) },
+    userId: scope.userId,
+    tenantId: scope.tenantId ?? undefined,
+    getFiles,
+  });
+  const admittedById = new Map(context.resources.map((resource) => [resource.file_id, resource]));
+  if (policyFiles.length !== files.length) {
+    throw new Error('Project resources changed during initialization');
+  }
+  for (const file of policyFiles) {
+    const admitted = admittedById.get(file.file_id);
+    const current = toCanonicalProjectResource(file);
+    if (
+      admitted?.availability !== 'ready' ||
+      current.availability !== 'ready' ||
+      current.identity !== admitted.identity ||
+      current.version !== admitted.version
+    ) {
+      throw new Error('Project resources changed during initialization');
+    }
+  }
+  assertModelBoundContent({ filters, files: policyFiles });
+  return policyFiles.map(toRuntimeFile);
 }
 
 /**
@@ -1550,6 +1604,25 @@ export async function initializeAgent(
     (appConfig?.endpoints?.[EModelEndpoint.agents]?.capabilities ?? []).includes(
       AgentCapabilities.file_search,
     );
+  let projectRuntimeFiles: TFile[] = [];
+  if (canUseProjectFileSearch && runtime.chatProjectContext != null && requestFileOwnerScope) {
+    runtime.chatProjectFilesPromise ??=
+      params.req?.chatProjectFilesPromise ??
+      resolveRuntimeProjectFiles({
+        context: runtime.chatProjectContext,
+        scope: requestFileOwnerScope,
+        getFiles: db.getFiles as never,
+        filters: appConfig?.filters,
+      });
+    if (params.req) {
+      params.req.chatProjectFilesPromise = runtime.chatProjectFilesPromise;
+    }
+    projectRuntimeFiles = await runtime.chatProjectFilesPromise;
+    runtime.chatProjectFiles = projectRuntimeFiles;
+    if (params.req) {
+      params.req.chatProjectFiles = projectRuntimeFiles;
+    }
+  }
 
   /**
    * Usage accounting is the first file mutation. It runs only after every
@@ -1630,31 +1703,6 @@ export async function initializeAgent(
       });
     },
   });
-  if (
-    canUseProjectFileSearch &&
-    runtime.chatProjectContext != null &&
-    runtime.chatProjectFiles == null &&
-    requestFileOwnerId
-  ) {
-    runtime.chatProjectFilesPromise ??=
-      params.req?.chatProjectFilesPromise ??
-      resolveChatProjectFiles({
-        project: runtime.chatProjectContext,
-        userId: requestFileOwnerId,
-        tenantId: user?.tenantId,
-        getFiles: db.getFiles as never,
-      });
-    if (params.req) {
-      params.req.chatProjectFilesPromise = runtime.chatProjectFilesPromise;
-    }
-    runtime.chatProjectFiles = await runtime.chatProjectFilesPromise;
-    if (params.req) {
-      params.req.chatProjectFiles = runtime.chatProjectFiles;
-    }
-  }
-  const projectRuntimeFiles: TFile[] = shouldUseChatProjectContext
-    ? (runtime.chatProjectFiles ?? [])
-    : [];
   let runtimeToolResources = addProjectFilesToFileSearch(
     tool_resources,
     projectRuntimeFiles,

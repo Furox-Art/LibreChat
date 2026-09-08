@@ -39,6 +39,7 @@ export function createAgentExecutionContext({
   hasResolvedConversation = false,
   chatProjectContext,
   chatProjectFiles,
+  chatProjectFilesPromise,
 }: {
   user?: IUser;
   appConfig?: AppConfig;
@@ -49,6 +50,7 @@ export function createAgentExecutionContext({
   hasResolvedConversation?: boolean;
   chatProjectContext?: ResolvedChatProjectContext | null;
   chatProjectFiles?: TFile[];
+  chatProjectFilesPromise?: Promise<TFile[]>;
 }): AgentExecutionContext {
   const context: AgentExecutionContext = {
     user,
@@ -58,6 +60,7 @@ export function createAgentExecutionContext({
     conversationCreatedAt,
     ...(chatProjectContext !== undefined ? { chatProjectContext } : {}),
     ...(chatProjectFiles !== undefined ? { chatProjectFiles } : {}),
+    ...(chatProjectFilesPromise !== undefined ? { chatProjectFilesPromise } : {}),
   };
   if (hasResolvedConversation) {
     context.resolvedConversation = resolvedConversation ?? null;
@@ -82,5 +85,6 @@ export function createRequestAgentExecutionContext(
     hasResolvedConversation: Object.prototype.hasOwnProperty.call(req, 'resolvedConversation'),
     chatProjectContext: req.chatProjectContext,
     chatProjectFiles: req.chatProjectFiles,
+    chatProjectFilesPromise: req.chatProjectFilesPromise,
   });
 }

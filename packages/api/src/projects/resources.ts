@@ -1,10 +1,12 @@
+import { createHash } from 'crypto';
 import { FileContext } from 'librechat-data-provider';
 import type { TChatProject, TChatProjectFile, TFile } from 'librechat-data-provider';
 import type { IChatProject, IMongoFile } from '@librechat/data-schemas';
 import type { FilterQuery, SortOrder } from 'mongoose';
 
-type ProjectFileRecord = Pick<
+export type ProjectFileRecord = Pick<
   IMongoFile,
+  | '_id'
   | 'file_id'
   | 'filename'
   | 'filepath'
@@ -17,9 +19,20 @@ type ProjectFileRecord = Pick<
   | 'expiredAt'
   | 'user'
   | 'tenantId'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'previewRevision'
+  | 'status'
+  | 'text'
 >;
 
-/** File lookup used by project hydration. The projection excludes extracted text and storage internals. */
+export type CanonicalProjectResource = {
+  file_id: string;
+  identity: string;
+  version: string;
+} & ({ availability: 'ready'; file: TFile } | { availability: 'unavailable' });
+
+/** Canonical lookup; metadata snapshots omit bodies, while active policy selects full records. */
 export type GetProjectFiles = (
   filter: FilterQuery<IMongoFile>,
   sortOptions?: Record<string, SortOrder> | null,
@@ -50,11 +63,13 @@ async function loadProjectFiles({
   userId,
   tenantId,
   getFiles,
+  includeContent = false,
 }: {
   project: Pick<IChatProject, 'file_ids'> | Pick<TChatProject, 'file_ids'>;
   userId: string;
   tenantId?: string;
   getFiles: GetProjectFiles;
+  includeContent?: boolean;
 }): Promise<{ fileIds: string[]; byId: Map<string, ProjectFileRecord> }> {
   const fileIds = [
     ...new Set(
@@ -75,23 +90,96 @@ async function loadProjectFiles({
       tenantId: tenantId != null && tenantId !== '' ? tenantId : null,
     },
     null,
-    {
-      _id: 0,
-      file_id: 1,
-      filename: 1,
-      filepath: 1,
-      object: 1,
-      type: 1,
-      bytes: 1,
-      usage: 1,
-      embedded: 1,
-      context: 1,
-      expiredAt: 1,
-      user: 1,
-      tenantId: 1,
-    },
+    includeContent
+      ? {}
+      : {
+          _id: 1,
+          file_id: 1,
+          filename: 1,
+          filepath: 1,
+          object: 1,
+          type: 1,
+          bytes: 1,
+          usage: 1,
+          embedded: 1,
+          context: 1,
+          expiredAt: 1,
+          user: 1,
+          tenantId: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          previewRevision: 1,
+          status: 1,
+        },
   );
   return { fileIds, byId: new Map((files ?? []).map((file) => [file.file_id, file])) };
+}
+
+function canonicalResourceVersion(
+  file: ProjectFileRecord,
+  identity: string,
+  availability: 'ready' | 'unavailable',
+): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        identity,
+        file_id: file.file_id,
+        availability,
+        embedded: file.embedded ?? null,
+        context: file.context ?? null,
+        expiredAt: file.expiredAt?.toISOString() ?? null,
+        createdAt: file.createdAt?.toISOString() ?? null,
+        updatedAt: file.updatedAt?.toISOString() ?? null,
+        previewRevision: file.previewRevision ?? null,
+        status: file.status ?? null,
+        bytes: file.bytes,
+        filename: file.filename,
+        filepath: file.filepath,
+        type: file.type,
+      }),
+    )
+    .digest('hex');
+}
+
+export function toCanonicalProjectResource(file: ProjectFileRecord): CanonicalProjectResource {
+  if (file._id == null) {
+    throw new Error('Project file identity unavailable');
+  }
+  const identity = file._id.toString();
+  const availability = getChatProjectFileAvailability(file);
+  const version = canonicalResourceVersion(file, identity, availability);
+  if (availability === 'ready') {
+    return { file_id: file.file_id, identity, availability, version, file: toRuntimeFile(file) };
+  }
+  return { file_id: file.file_id, identity, availability, version };
+}
+
+export async function resolveChatProjectResources(params: {
+  project: Pick<IChatProject, 'file_ids'> | Pick<TChatProject, 'file_ids'>;
+  userId: string;
+  tenantId?: string;
+  getFiles: GetProjectFiles;
+}): Promise<CanonicalProjectResource[]> {
+  const { fileIds, byId } = await loadProjectFiles(params);
+  return fileIds.map((fileId) => {
+    const file = byId.get(fileId);
+    return file == null
+      ? { file_id: fileId, identity: 'missing', availability: 'unavailable', version: 'missing' }
+      : toCanonicalProjectResource(file);
+  });
+}
+
+export async function resolveChatProjectPolicyFiles(params: {
+  project: Pick<IChatProject, 'file_ids'> | Pick<TChatProject, 'file_ids'>;
+  userId: string;
+  tenantId?: string;
+  getFiles: GetProjectFiles;
+}): Promise<ProjectFileRecord[]> {
+  const { fileIds, byId } = await loadProjectFiles({ ...params, includeContent: true });
+  return fileIds
+    .map((fileId) => byId.get(fileId))
+    .filter((file): file is ProjectFileRecord => getChatProjectFileAvailability(file) === 'ready');
 }
 
 export function toRuntimeFile(file: ProjectFileRecord): TFile {
@@ -120,12 +208,23 @@ export async function resolveChatProjectFiles(params: {
   userId: string;
   tenantId?: string;
   getFiles: GetProjectFiles;
+  resources?: readonly CanonicalProjectResource[];
 }): Promise<TFile[]> {
-  const { fileIds, byId } = await loadProjectFiles(params);
-  return fileIds
-    .map((fileId) => byId.get(fileId))
-    .filter((file): file is ProjectFileRecord => getChatProjectFileAvailability(file) === 'ready')
-    .map(toRuntimeFile);
+  const resources =
+    params.resources ??
+    (await resolveChatProjectResources({
+      project: params.project,
+      userId: params.userId,
+      tenantId: params.tenantId,
+      getFiles: params.getFiles,
+    }));
+  const files: TFile[] = [];
+  for (const resource of resources) {
+    if (resource.availability === 'ready') {
+      files.push(resource.file);
+    }
+  }
+  return files;
 }
 
 /**

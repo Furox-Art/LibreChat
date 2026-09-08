@@ -1711,7 +1711,7 @@ describe('File Methods', () => {
       expect(updated2?.usage).toBe(6);
     });
 
-    it('should skip usage and TTL mutation when the owner filter does not match', async () => {
+    it('scopes usage and hold consumption without advancing the content version', async () => {
       const fileId = uuidv4();
       const ownerId = new mongoose.Types.ObjectId();
       const otherUserId = new mongoose.Types.ObjectId();
@@ -1726,6 +1726,11 @@ describe('File Methods', () => {
         bytes: 100,
         usage: 0,
       });
+      const contentUpdatedAt = new Date('2020-01-01');
+      await File.collection.updateOne(
+        { file_id: fileId },
+        { $set: { updatedAt: contentUpdatedAt } },
+      );
 
       const denied = await fileMethods.updateFileUsage({
         file_id: fileId,
@@ -1746,6 +1751,12 @@ describe('File Methods', () => {
       expect(allowed?.usage).toBe(1);
       expect(allowed?.temp_file_id).toBeUndefined();
       expect(allowed?.expiresAt).toBeUndefined();
+      expect(allowed?.updatedAt).toEqual(contentUpdatedAt);
+      const changedContent = await fileMethods.updateFile({
+        file_id: fileId,
+        text: 'Updated canonical file contents.',
+      });
+      expect(changedContent?.updatedAt?.getTime()).toBeGreaterThan(contentUpdatedAt.getTime());
     });
   });
 

@@ -67,8 +67,12 @@ type DialogTemplateProps = {
   footerClassName?: string;
   showCloseButton?: boolean;
   showCancelButton?: boolean;
+  cancelDisabled?: boolean;
   onClose?: () => void;
   onOpenAutoFocus?: ComponentProps<typeof OGDialogContent>['onOpenAutoFocus'];
+  onCloseAutoFocus?: ComponentProps<typeof OGDialogContent>['onCloseAutoFocus'];
+  onEscapeKeyDown?: ComponentProps<typeof OGDialogContent>['onEscapeKeyDown'];
+  onInteractOutside?: ComponentProps<typeof OGDialogContent>['onInteractOutside'];
 };
 
 const OGDialogTemplate: ForwardRefExoticComponent<
@@ -89,7 +93,11 @@ const OGDialogTemplate: ForwardRefExoticComponent<
     showCloseButton = false,
     overlayClassName,
     showCancelButton = true,
+    cancelDisabled = false,
     onOpenAutoFocus,
+    onCloseAutoFocus,
+    onEscapeKeyDown,
+    onInteractOutside,
   } = props;
   const isLegacySelection = isSelectionProps(selection);
   const legacySelection = isLegacySelection ? selection : null;
@@ -124,6 +132,9 @@ const OGDialogTemplate: ForwardRefExoticComponent<
       overlayClassName={overlayClassName}
       showCloseButton={showCloseButton}
       onOpenAutoFocus={onOpenAutoFocus}
+      onCloseAutoFocus={onCloseAutoFocus}
+      onEscapeKeyDown={onEscapeKeyDown}
+      onInteractOutside={onInteractOutside}
       ref={ref}
       className={cn(
         /** `border-none` clears the default edge; the contrast variant has to
@@ -148,7 +159,11 @@ const OGDialogTemplate: ForwardRefExoticComponent<
         ) : null}
         {showCancelButton && (
           <OGDialogClose asChild>
-            <Button variant="outline" aria-label={localize('com_ui_cancel')}>
+            <Button
+              variant="outline"
+              aria-label={localize('com_ui_cancel')}
+              disabled={cancelDisabled}
+            >
               {localize('com_ui_cancel')}
             </Button>
           </OGDialogClose>

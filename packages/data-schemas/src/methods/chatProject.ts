@@ -507,23 +507,32 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
     }
 
     const File = mongoose.models.File as Model<IMongoFile>;
-    const file = await File.findOneAndUpdate(
-      {
-        file_id: fileId,
-        user,
-        tenantId: project.tenantId ?? null,
-        embedded: true,
-        context: FileContext.message_attachment,
-        $or: [{ expiredAt: null }, { expiredAt: { $gt: new Date() } }],
-      },
-      { $unset: { expiresAt: '', temp_file_id: '' } },
-      { new: true },
-    )
-      .select('file_id')
+    const file = await File.findOne({
+      file_id: fileId,
+      user,
+      tenantId: project.tenantId ?? null,
+      embedded: true,
+      context: FileContext.message_attachment,
+      $or: [{ expiredAt: null }, { expiredAt: { $gt: new Date() } }],
+    })
+      .select('_id file_id')
       .lean();
     if (!file) {
       throw new Error('Project file unavailable');
     }
+
+    const releaseTemporaryHold = async () => {
+      await File.findOneAndUpdate(
+        {
+          _id: file._id,
+          file_id: fileId,
+          user,
+          tenantId: project.tenantId ?? null,
+        },
+        { $unset: { expiresAt: '', temp_file_id: '' } },
+        { timestamps: false },
+      );
+    };
 
     const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
     const updated = await ChatProject.findOneAndUpdate(
@@ -537,10 +546,15 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
       { new: true, runValidators: true },
     ).lean<IChatProject>();
     if (updated) {
+      await releaseTemporaryHold();
       return updated;
     }
     const current = await getChatProject(user, projectId);
-    if (!current || current.file_ids?.includes(fileId)) {
+    if (!current) {
+      return null;
+    }
+    if (current.file_ids?.includes(fileId)) {
+      await releaseTemporaryHold();
       return current;
     }
     throw new Error('Project file limit reached');

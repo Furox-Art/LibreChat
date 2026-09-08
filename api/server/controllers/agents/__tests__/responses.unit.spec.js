@@ -1785,6 +1785,35 @@ describe('createResponse controller', () => {
         'not_found',
       );
     });
+    it('rechecks conversation existence after enrollment before provider or persistence work', async () => {
+      const api = require('@librechat/api');
+      const models = require('~/models');
+      api.validateResponseRequest.mockReturnValueOnce({
+        request: {
+          model: 'agent-123',
+          input: 'Hello',
+          stream: false,
+          store: true,
+          previous_response_id: 'resp_abc',
+        },
+      });
+      let deleted = false;
+      models.getConvo.mockImplementation(async () =>
+        deleted ? null : { conversationId: 'resp_abc', user: 'user-123' },
+      );
+      mockEnrollAgentExecution.mockImplementationOnce(async () => {
+        deleted = true;
+        return mockExecution;
+      });
+
+      await createResponse(req, res);
+
+      expect(mockEnrollAgentExecution).toHaveBeenCalledTimes(1);
+      expect(api.initializeAgent).not.toHaveBeenCalled();
+      expect(api.createRun).not.toHaveBeenCalled();
+      expect(models.saveConvo).not.toHaveBeenCalled();
+      expect(models.saveMessage).not.toHaveBeenCalled();
+    });
 
     it('should proceed when conversation is owned by user', async () => {
       const { validateResponseRequest, sendResponsesErrorResponse } = require('@librechat/api');

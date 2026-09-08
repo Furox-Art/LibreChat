@@ -1,7 +1,6 @@
 import { useDeferredValue, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { v4 } from 'uuid';
 import * as Ariakit from '@ariakit/react';
-import { EToolResources, FileContext, MAX_CHAT_PROJECT_FILES } from 'librechat-data-provider';
 import {
   ChevronDown,
   FilePlus2,
@@ -15,6 +14,14 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import {
+  defaultAgentCapabilities,
+  EToolResources,
+  FileContext,
+  MAX_CHAT_PROJECT_FILES,
+  PermissionTypes,
+  Permissions,
+} from 'librechat-data-provider';
 import {
   Alert,
   Button,
@@ -30,7 +37,7 @@ import {
   TooltipAnchor,
   useToastContext,
 } from '@librechat/client';
-import type { TChatProjectFile, TFile, TFileUpload } from 'librechat-data-provider';
+import type { TChatProjectFile, TError, TFile, TFileUpload } from 'librechat-data-provider';
 import type { LocalizeFunction } from '~/common';
 import {
   useAddProjectFileMutation,
@@ -39,9 +46,9 @@ import {
   useRemoveProjectFileMutation,
   useUploadFileMutation,
 } from '~/data-provider';
+import { useAgentCapabilities, useGetAgentsConfig, useHasAccess, useLocalize } from '~/hooks';
 import { NotificationSeverity } from '~/common';
 import { formatFileSize } from '~/utils';
-import { useLocalize } from '~/hooks';
 type ProjectResourcesProps = {
   project: { _id: string; fileCount?: number };
 };
@@ -51,7 +58,19 @@ type UploadState = {
   filename: string;
   file: File;
   fileId?: string;
+  errorMessage?: string;
   status: 'processing' | 'failed';
+};
+
+const getUploadErrorMessage = (error: unknown, localize: LocalizeFunction): string => {
+  const uploadError = error as TError | undefined;
+  if (uploadError?.code === 'ERR_CANCELED') {
+    return localize('com_error_files_upload_canceled');
+  }
+  const serverMessage = uploadError?.response?.data?.message;
+  return typeof serverMessage === 'string' && serverMessage.trim().length > 0
+    ? serverMessage
+    : localize('com_error_files_upload');
 };
 function statusLabel(localize: LocalizeFunction, availability: TChatProjectFile['availability']) {
   return availability === 'ready'
@@ -65,6 +84,15 @@ const isEligibleFile = (file: TFile) =>
   (!file.expiredAt || new Date(file.expiredAt).getTime() > Date.now());
 export default function ProjectResources({ project }: ProjectResourcesProps) {
   const localize = useLocalize();
+  const { agentsConfig } = useGetAgentsConfig();
+  const { fileSearchEnabled } = useAgentCapabilities(
+    agentsConfig?.capabilities ?? defaultAgentCapabilities,
+  );
+  const canUseFileSearch = useHasAccess({
+    permissionType: PermissionTypes.FILE_SEARCH,
+    permission: Permissions.USE,
+  });
+  const canUploadFromDevice = fileSearchEnabled && canUseFileSearch;
   const { showToast } = useToastContext();
   const inputRef = useRef<HTMLInputElement>(null);
   const pickerMenuRef = useRef<HTMLButtonElement>(null);
@@ -187,11 +215,12 @@ export default function ProjectResources({ project }: ProjectResourcesProps) {
       optimisticAttachedIdsRef.current.add(fileId);
       setOptimisticAttachedIds(Array.from(optimisticAttachedIdsRef.current));
       setUploading((current) => current.filter((candidate) => candidate.id !== item.id));
-    } catch {
+    } catch (error: unknown) {
       pendingUploadIdsRef.current.delete(item.id);
+      const errorMessage = getUploadErrorMessage(error, localize);
       setUploading((current) =>
         current.map((candidate) =>
-          candidate.id === item.id ? { ...candidate, status: 'failed' } : candidate,
+          candidate.id === item.id ? { ...candidate, errorMessage, status: 'failed' } : candidate,
         ),
       );
     }
@@ -206,7 +235,7 @@ export default function ProjectResources({ project }: ProjectResourcesProps) {
   const handleUploadChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(event.target.files ?? []);
     event.target.value = '';
-    if (!selected.length) {
+    if (!selected.length || !canUploadFromDevice) {
       return;
     }
     const availableCapacity = Math.max(0, MAX_CHAT_PROJECT_FILES - getEffectiveFileCount());
@@ -245,7 +274,7 @@ export default function ProjectResources({ project }: ProjectResourcesProps) {
   };
 
   const retryUpload = (item: UploadState) => {
-    if (pendingUploadIdsRef.current.has(item.id)) {
+    if (pendingUploadIdsRef.current.has(item.id) || (!item.fileId && !canUploadFromDevice)) {
       return;
     }
     if (getEffectiveFileCount() >= MAX_CHAT_PROJECT_FILES) {
@@ -259,10 +288,12 @@ export default function ProjectResources({ project }: ProjectResourcesProps) {
     pendingUploadIdsRef.current.add(item.id);
     setUploading((current) =>
       current.map((candidate) =>
-        candidate.id === item.id ? { ...candidate, status: 'processing' } : candidate,
+        candidate.id === item.id
+          ? { ...candidate, errorMessage: undefined, status: 'processing' }
+          : candidate,
       ),
     );
-    void runUpload({ ...item, status: 'processing' });
+    void runUpload({ ...item, errorMessage: undefined, status: 'processing' });
   };
 
   const dismissUpload = (id: string) => {
@@ -315,11 +346,15 @@ export default function ProjectResources({ project }: ProjectResourcesProps) {
               </Ariakit.MenuButton>
             }
             items={[
-              {
-                label: localize('com_ui_project_upload_file'),
-                icon: <Upload className="size-4 text-text-secondary" aria-hidden="true" />,
-                onClick: () => inputRef.current?.click(),
-              },
+              ...(canUploadFromDevice
+                ? [
+                    {
+                      label: localize('com_ui_project_upload_file'),
+                      icon: <Upload className="size-4 text-text-secondary" aria-hidden="true" />,
+                      onClick: () => inputRef.current?.click(),
+                    },
+                  ]
+                : []),
               {
                 label: localize('com_ui_project_choose_file'),
                 icon: <Link2 className="size-4 text-text-secondary" aria-hidden="true" />,
@@ -371,7 +406,8 @@ export default function ProjectResources({ project }: ProjectResourcesProps) {
             <div
               key={item.id}
               role="listitem"
-              className="flex items-center gap-3 rounded-xl border border-border-light bg-surface-secondary px-3.5 py-3"
+              aria-describedby={item.errorMessage ? `${item.id}-error` : undefined}
+              className="flex flex-wrap items-center gap-3 rounded-xl border border-border-light bg-surface-secondary px-3.5 py-3"
             >
               {item.status === 'processing' ? (
                 <Loader2
@@ -389,9 +425,24 @@ export default function ProjectResources({ project }: ProjectResourcesProps) {
                   ? localize('com_ui_project_file_processing')
                   : localize('com_ui_project_file_failed')}
               </span>
+              {item.errorMessage && (
+                <p
+                  id={`${item.id}-error`}
+                  role="alert"
+                  className="basis-full text-xs text-text-destructive"
+                >
+                  {item.errorMessage}
+                </p>
+              )}
               {item.status === 'failed' && (
                 <>
-                  <Button type="button" variant="ghost" size="sm" onClick={() => retryUpload(item)}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={!item.fileId && !canUploadFromDevice}
+                    onClick={() => retryUpload(item)}
+                  >
                     {localize('com_ui_retry')}
                   </Button>
                   <Button

@@ -595,6 +595,10 @@ describe('persistent Project context', () => {
     const id = first._id!.toString();
     const attached = await methods.addChatProjectFile(owner, id, original.file_id);
     await methods.addChatProjectFile(owner, second._id!.toString(), original.file_id);
+    await File.updateOne(
+      { _id: original._id },
+      { $set: { expiresAt: new Date('2026-12-01T00:00:00.000Z'), temp_file_id: 'retry-temp' } },
+    );
     const duplicate = await methods.addChatProjectFile(owner, id, original.file_id);
     expect(duplicate?.file_ids).toEqual(['shared-reference']);
     expect(duplicate?.contextRevision).toBe(attached?.contextRevision);
@@ -606,6 +610,7 @@ describe('persistent Project context', () => {
     expect(canonical?._id.toString()).toBe(original._id.toString());
     expect(canonical?.filepath).toBe(original.filepath);
     expect(canonical?.expiredAt).toEqual(deadline);
+    expect(canonical).not.toHaveProperty('temp_file_id');
     expect(canonical).not.toHaveProperty('expiresAt');
     expect(await File.countDocuments({})).toBe(1);
     const detached = await methods.removeChatProjectFile(owner, id, original.file_id);
@@ -630,6 +635,13 @@ describe('persistent Project context', () => {
         'Project file unavailable',
       );
     }
+    const orphanExpiry = new Date('2026-12-15T00:00:00.000Z');
+    await createReference('orphan', { expiresAt: orphanExpiry, temp_file_id: 'orphan-temp' });
+    const missingProjectId = new mongoose.Types.ObjectId().toString();
+    expect(await methods.addChatProjectFile(owner, missingProjectId, 'orphan')).toBeNull();
+    const orphan = await File.findOne({ file_id: 'orphan' }).lean();
+    expect(orphan?.expiresAt).toEqual(orphanExpiry);
+    expect(orphan?.temp_file_id).toBe('orphan-temp');
     await createReference('private');
     expect(await methods.addChatProjectFile(otherOwner, id, 'private')).toBeNull();
     expect(
@@ -669,26 +681,87 @@ describe('persistent Project context', () => {
     });
   });
 
-  it('bounds concurrent attachment writes at the Project limit', async () => {
+  it('bounds concurrent attachment writes at the Project limit without consuming the losing hold', async () => {
     const project = await methods.createChatProject(owner, { name: 'Almost full' });
     const existingIds = Array.from(
       { length: MAX_CHAT_PROJECT_FILES - 1 },
       (_, index) => `ref-${index}`,
     );
     await ChatProject.updateOne({ _id: project._id }, { $set: { file_ids: existingIds } });
-    await Promise.all([createReference('last-a'), createReference('last-b')]);
-    const results = await Promise.allSettled(
-      ['last-a', 'last-b'].map((id) =>
-        methods.addChatProjectFile(owner, project._id!.toString(), id),
-      ),
-    );
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-    const rejected = results.find((result) => result.status === 'rejected');
-    expect(rejected?.status === 'rejected' && rejected.reason.message).toBe(
-      'Project file limit reached',
-    );
-    expect((await methods.getChatProject(owner, project._id!.toString()))?.file_ids).toHaveLength(
-      MAX_CHAT_PROJECT_FILES,
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    const firstExpiry = new Date(now + day);
+    const secondExpiry = new Date(now + 2 * day);
+    const firstRetentionExpiry = new Date(now + 3 * day);
+    const secondRetentionExpiry = new Date(now + 4 * day);
+    await createReference('last-a', {
+      expiresAt: firstExpiry,
+      temp_file_id: 'temporary-a',
+      expiredAt: firstRetentionExpiry,
+    });
+    await createReference('last-b', {
+      expiresAt: secondExpiry,
+      temp_file_id: 'temporary-b',
+      expiredAt: secondRetentionExpiry,
+    });
+
+    // Delay admission execution until both contenders have completed their initial Project read.
+    let admissions = 0;
+    let releaseAdmissions!: () => void;
+    const bothAdmissions = new Promise<void>((resolve) => {
+      releaseAdmissions = resolve;
+    });
+    const findOneAndUpdate = ChatProject.findOneAndUpdate.bind(ChatProject);
+    const admissionSpy = jest
+      .spyOn(ChatProject, 'findOneAndUpdate')
+      .mockImplementation((filter, update, options) => {
+        const query = findOneAndUpdate(filter, update, options);
+        const queryFilter = query.getFilter();
+        if (
+          admissions < 2 &&
+          queryFilter._id?.toString() === project._id!.toString() &&
+          queryFilter.file_ids != null
+        ) {
+          admissions += 1;
+          const exec = query.exec.bind(query);
+          jest.spyOn(query, 'exec').mockImplementation(async () => {
+            if (admissions === 2) {
+              releaseAdmissions();
+            }
+            await bothAdmissions;
+            return await exec();
+          });
+        }
+        return query;
+      });
+
+    try {
+      const results = await Promise.allSettled(
+        ['last-a', 'last-b'].map((id) =>
+          methods.addChatProjectFile(owner, project._id!.toString(), id),
+        ),
+      );
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.find((result) => result.status === 'rejected');
+      expect(rejected?.status === 'rejected' && rejected.reason.message).toBe(
+        'Project file limit reached',
+      );
+    } finally {
+      admissionSpy.mockRestore();
+    }
+
+    const savedProject = await methods.getChatProject(owner, project._id!.toString());
+    expect(savedProject?.file_ids).toHaveLength(MAX_CHAT_PROJECT_FILES);
+    const winner = savedProject?.file_ids?.includes('last-a') ? 'last-a' : 'last-b';
+    const loser = winner === 'last-a' ? 'last-b' : 'last-a';
+    const winnerFile = await File.findOne({ file_id: winner }).lean();
+    const loserFile = await File.findOne({ file_id: loser }).lean();
+    expect(winnerFile).not.toHaveProperty('expiresAt');
+    expect(winnerFile).not.toHaveProperty('temp_file_id');
+    expect(loserFile?.expiresAt).toEqual(loser === 'last-a' ? firstExpiry : secondExpiry);
+    expect(loserFile?.temp_file_id).toBe(`temporary-${loser === 'last-a' ? 'a' : 'b'}`);
+    expect(loserFile?.expiredAt).toEqual(
+      loser === 'last-a' ? firstRetentionExpiry : secondRetentionExpiry,
     );
   });
 });

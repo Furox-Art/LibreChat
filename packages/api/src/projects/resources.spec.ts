@@ -3,11 +3,11 @@ import { FileContext } from 'librechat-data-provider';
 import { createModels } from '@librechat/data-schemas';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import type { IChatProject, IMongoFile } from '@librechat/data-schemas';
+import type { GetProjectFiles } from './resources';
 import {
   getChatProjectFileAvailability,
   listChatProjectFileViews,
   resolveChatProjectFiles,
-  type GetProjectFiles,
 } from './resources';
 
 let mongoServer: InstanceType<typeof MongoMemoryServer>;

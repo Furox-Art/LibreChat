@@ -551,6 +551,7 @@ const initializeClient = async ({
           {
             getConvo: db.getConvo,
             getChatProject: db.getChatProject,
+            getFiles: db.getFiles,
           },
         ),
       );

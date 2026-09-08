@@ -20,6 +20,11 @@ other conversations in the Project.
 When `RAG_API_URL` is configured, Instructions and Files appear together above the chat list.
 Otherwise, Files is hidden and Instructions fills the row. Their info icons explain how context
 is used on hover or keyboard focus. Long instructions wrap within a scrollable preview.
+Uploading from your device also requires File Search permission and an enabled Agents File Search
+capability. Choosing existing references remains available independently.
+
+The Instructions editor prevents edits and dismissal while a save is pending, preserves the draft
+if saving fails, and returns keyboard focus to **Edit instructions** when closed.
 
 Saved instructions apply to future turns, including turns in already-existing conversations.
 Editing instructions does not rewrite historical messages. Moving a conversation to another
@@ -59,6 +64,9 @@ The initial supported representation is **File Search**:
 - Retrieval selects relevant excerpts on demand. A **Ready** reference is not a claim that its
   full contents have been included in a model request. No Project file text is eagerly loaded
   into every turn.
+- Project resolution reads canonical metadata without file bodies. When an active file policy
+  applies, File Search admission rechecks canonical contents before tool setup and reuses the
+  inspected snapshot without adding the full text to the model prompt.
 - Hosted Assistants receive Project instructions but do not receive these RAG resources. Their
   provider-managed thread/vector-store resources are a separate representation.
 
@@ -67,10 +75,12 @@ that upload attempt in the workspace. A failed attempt is not represented as a s
 attached file. Persisted references are **Ready** when their canonical record is eligible and
 indexed, or **Unavailable** when missing, expired, or no longer eligible. These states are not
 inferred from the unrelated rich-preview processing status.
+Failed uploads show the server's user-facing rejection reason when available, with a generic
+fallback for unexpected errors. Retrying a failed association reuses the already-uploaded file.
 
-Adding a reference consumes any temporary upload hold without extending the deployment's
-retention deadline. `expiredAt` remains authoritative. Projects do not create a new retention
-policy or storage backend.
+Only a successful reference attachment consumes the temporary upload hold. Rejected additions,
+including capacity-race losers, retain their cleanup deadline. `expiredAt` remains authoritative
+and is never extended by attachment. Projects do not create a new retention policy or storage backend.
 
 ## Authority, tenancy, and sharing
 
@@ -97,11 +107,18 @@ Legacy documents normalize to empty instructions, no files, and revision zero wi
 Event-actor compatibility includes Project identity/revision along with initialized instructions.
 Changed context follows the existing incompatible-checkpoint cold reconstruction path.
 
+Canonical resource availability and identity/version also participate in compatibility. Expired,
+deleted, ineligible, or replaced files invalidate paused context even when the Project's revision
+and reference IDs are unchanged. Usage and temporary-hold bookkeeping do not advance file content
+timestamps.
+
 Paused approval/question runs retain a server-private Project context key. The winning resume
 claim re-resolves current conversation membership and Project context. If incompatible, it
 terminates that generation and cleans up only its checkpoint namespace, returning HTTP 409 with
 `code: PROJECT_CONTEXT_CHANGED`. Start a new turn rather than replaying partially executed tools.
 Legacy paused work with no recorded key is not accepted against newly active Project context.
+Failures while refreshing a claimed turn use the same generation-scoped cleanup as other resume
+failures, rather than leaving the consumed approval running without a continuation.
 
 Normal chats, regeneration, scheduled/triggered chats, and durable continuations use the shared
 server context resolution. API calls bound to an existing owned conversation inherit its context;
