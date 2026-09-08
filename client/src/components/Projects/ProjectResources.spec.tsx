@@ -236,15 +236,20 @@ describe('ProjectResources', () => {
 
   it('retries a failed association without uploading another binary', async () => {
     mockUploadMutateAsync.mockResolvedValue(uploadedFile);
-    mockAddMutateAsync.mockRejectedValueOnce(new Error('temporary association failure'));
+    mockAddMutateAsync.mockRejectedValueOnce({
+      message: 'unsafe association detail',
+      response: { data: { error: 'Project file limit reached' } },
+    });
     renderResources();
     fireEvent.change(screen.getByTestId('project-upload-input'), {
       target: { files: [new File(['x'], 'reference.txt')] },
     });
-    await screen.findByText('Upload failed');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Project file limit reached');
+    expect(screen.queryByText('unsafe association detail')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.queryByText('Upload failed')).not.toBeInTheDocument());
     await waitFor(() => expect(screen.queryByText('Processing')).not.toBeInTheDocument());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(mockUploadMutateAsync).toHaveBeenCalledTimes(1);
     expect(mockAddMutateAsync).toHaveBeenLastCalledWith({
       projectId: 'project-1',

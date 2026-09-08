@@ -67,9 +67,13 @@ const getUploadErrorMessage = (error: unknown, localize: LocalizeFunction): stri
   if (uploadError?.code === 'ERR_CANCELED') {
     return localize('com_error_files_upload_canceled');
   }
-  const serverMessage = uploadError?.response?.data?.message;
-  return typeof serverMessage === 'string' && serverMessage.trim().length > 0
-    ? serverMessage
+  const responseData = uploadError?.response?.data;
+  if (typeof responseData?.message === 'string' && responseData.message.trim().length > 0) {
+    return responseData.message;
+  }
+  const associationError = responseData && 'error' in responseData ? responseData.error : undefined;
+  return typeof associationError === 'string' && associationError.trim().length > 0
+    ? associationError
     : localize('com_error_files_upload');
 };
 function statusLabel(localize: LocalizeFunction, availability: TChatProjectFile['availability']) {

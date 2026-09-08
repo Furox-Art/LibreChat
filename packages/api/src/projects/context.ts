@@ -29,6 +29,8 @@ export interface ResolveChatProjectContextInput {
   conversationId?: string | null;
   requestedProjectId?: string | null;
   resolvedConversation?: ConversationSnapshot | null;
+  /** Trusted server-side control for callers that only need project guidance. */
+  includeResources?: boolean;
 }
 
 export interface ResolveChatProjectContextDeps {
@@ -52,6 +54,7 @@ export async function resolveChatProjectContext(
     conversationId,
     requestedProjectId,
     resolvedConversation: suppliedConversation,
+    includeResources = true,
   } = input;
 
   let conversation: ConversationSnapshot | null | undefined = suppliedConversation;
@@ -111,12 +114,15 @@ export async function resolveChatProjectContext(
   const file_ids = Array.isArray(project.file_ids)
     ? project.file_ids.filter((fileId): fileId is string => typeof fileId === 'string')
     : [];
-  const resources = await resolveChatProjectResources({
-    project: { file_ids },
-    userId,
-    tenantId: tenantId ?? undefined,
-    getFiles: deps.getFiles,
-  });
+  const resources =
+    includeResources === false
+      ? []
+      : await resolveChatProjectResources({
+          project: { file_ids },
+          userId,
+          tenantId: tenantId ?? undefined,
+          getFiles: deps.getFiles,
+        });
   return {
     projectId: projectIdFromRecord,
     contextRevision:

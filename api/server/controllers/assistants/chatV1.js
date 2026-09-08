@@ -282,6 +282,7 @@ const chatV1 = async (req, res) => {
         conversationId: convoId,
         requestedProjectId: endpointOption?.chatProjectId ?? req.body?.chatProjectId,
         resolvedConversation: existingConversation,
+        includeResources: false,
       },
       { getConvo, getChatProject, getFiles },
     );

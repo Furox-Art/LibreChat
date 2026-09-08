@@ -35,6 +35,32 @@ describe('resolveChatProjectContext', () => {
     expect(getChatProject).toHaveBeenCalledWith('user-a', 'project-a');
     expect(getChatProject).toHaveBeenCalledTimes(1);
   });
+  it('keeps authorized guidance available when the unused resource lookup would fail', async () => {
+    const getChatProject = jest.fn().mockResolvedValue(project);
+    const getFiles = jest.fn().mockRejectedValue(new Error('Project resource lookup unavailable'));
+
+    const guidanceOnly = await resolveChatProjectContext(
+      { userId: 'user-a', requestedProjectId: 'project-a', includeResources: false },
+      { getConvo: jest.fn(), getChatProject, getFiles },
+    );
+    expect(guidanceOnly).toEqual(
+      expect.objectContaining({
+        projectId: 'project-a',
+        instructions: 'Use the project policy.',
+        file_ids: ['file-a'],
+        resources: [],
+      }),
+    );
+    expect(getFiles).not.toHaveBeenCalled();
+
+    await expect(
+      resolveChatProjectContext(
+        { userId: 'user-a', requestedProjectId: 'project-a' },
+        { getConvo: jest.fn(), getChatProject, getFiles },
+      ),
+    ).rejects.toThrow('Project resource lookup unavailable');
+    expect(getFiles).toHaveBeenCalledTimes(1);
+  });
 
   it('preserves an authoritative unscoped conversation', async () => {
     const getChatProject = jest.fn();

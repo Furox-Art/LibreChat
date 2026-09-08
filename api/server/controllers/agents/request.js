@@ -21,6 +21,10 @@ const {
   exemptFromConcurrencyLimiter,
   isScheduleFireRequest,
   isUnpersistedPreliminaryParent,
+  resolveChatProjectContext,
+  assertModelBoundContent,
+  isContentFilterError,
+  CHAT_PROJECT_CONTEXT_UNAVAILABLE,
   resolveConversationAnchor,
   getAgentStartupTelemetry,
   acceptAgentStartupTelemetry,
@@ -54,6 +58,8 @@ const {
   saveConvo,
   getMessages,
   getConvo,
+  getChatProject,
+  getFiles,
   getAgentEventActorSnapshot,
   commitAgentEventActorState,
   storeAgentEventActorSuspension,
@@ -103,6 +109,17 @@ function getInitializationFailure(error) {
     };
   }
 
+  if (error?.message === CHAT_PROJECT_CONTEXT_UNAVAILABLE) {
+    return {
+      status: 404,
+      error: 'Conversation context unavailable',
+    };
+  }
+
+  if (isContentFilterError(error)) {
+    return { status: error.statusCode, ...error.body };
+  }
+
   const candidateStatus = error?.status ?? error?.statusCode;
   if (!Number.isInteger(candidateStatus) || candidateStatus < 400 || candidateStatus >= 600) {
     return null;
@@ -112,6 +129,63 @@ function getInitializationFailure(error) {
     ...(typeof error?.code === 'string' ? { code: error.code } : {}),
     error: error?.message || 'Failed to start generation',
   };
+}
+
+function startAgentProjectContextResolution({
+  req,
+  endpointOption,
+  conversationId,
+  isNewConvo,
+  conversationAnchorPromise,
+}) {
+  if (req.chatProjectContext !== undefined) {
+    return Promise.resolve(req.chatProjectContext);
+  }
+
+  const requestedProjectId =
+    endpointOption?.chatProjectId !== undefined
+      ? endpointOption.chatProjectId
+      : req.body?.chatProjectId;
+  const contextPromise = conversationAnchorPromise
+    .then(({ conversation }) => {
+      // An existing chat's undefined anchor is a failed read, not confirmed absence.
+      if (conversation !== undefined || isNewConvo) {
+        req.resolvedConversation = conversation ?? null;
+      }
+      return resolveChatProjectContext(
+        {
+          userId: req.user.id,
+          tenantId:
+            req._agentEventBindingParentConversationId != null
+              ? req._agentEventBindingTenantId
+              : req.user.tenantId || undefined,
+          conversationId,
+          requestedProjectId,
+          resolvedConversation: isNewConvo ? (conversation ?? null) : conversation,
+        },
+        {
+          getConvo: async (...args) => {
+            const loaded = await getConvo(...args);
+            if (!isNewConvo) {
+              req.resolvedConversation = loaded;
+            }
+            return loaded;
+          },
+          getChatProject,
+          getFiles,
+        },
+      );
+    })
+    .then((context) => {
+      req.chatProjectContext = context;
+      req.chatProjectContextEnabled = true;
+      return context;
+    });
+  // Admission/idempotency may return before this promise is awaited. Attach a
+  // rejection handler to avoid an unhandled rejection while preserving the
+  // original promise for the eventual preflight await.
+  contextPromise.catch(() => {});
+  return contextPromise;
 }
 
 function resolveConversationCreatedAt({ userId, conversationId, isNewConvo, conversation }) {
@@ -860,6 +934,16 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
       ? req.resolvedConversation
       : undefined,
   });
+  // Resolve the authoritative project context while idempotency and admission
+  // gates proceed below. The promise is awaited before createJob, so rejected
+  // project policy never receives an HTTP generation ACK.
+  const chatProjectContextPromise = startAgentProjectContextResolution({
+    req,
+    endpointOption,
+    conversationId,
+    isNewConvo,
+    conversationAnchorPromise,
+  });
 
   /** A newly bound actor conversation has no child messages yet, so its first
    * event legitimately uses the root parent id. The authenticated write guard
@@ -1543,6 +1627,13 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
   req._agentEventTriggerProjection = getAgentEventTriggerProjection(agentEventDelivery);
 
   try {
+    const chatProjectContext = await chatProjectContextPromise;
+    if (chatProjectContext?.instructions.trim()) {
+      assertModelBoundContent({
+        filters: req.config?.filters,
+        agents: [{ instructions: chatProjectContext.instructions }],
+      });
+    }
     logger.debug(`[ResumableAgentController] Creating job`, {
       streamId,
       conversationId,

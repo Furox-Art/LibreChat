@@ -2215,6 +2215,99 @@ test.describe('persisted source-aware content filters', () => {
     }
   });
 
+  test('rejects filtered and deleted Projects before creating an Agent turn', async ({
+    request,
+  }) => {
+    const token = await loginAdmin(request);
+    const suffix = randomUUID();
+    const marker = `E2E-PROJECT-GUIDANCE-${suffix}`;
+    const fixtures: StoredFixtures = { conversationIds: [], agentIds: [] };
+    let projectId: string | undefined;
+    try {
+      await restoreRuntimeFilters(request, token);
+      const agent = await createAgent(request, token, fixtures, suffix);
+      const agentId = requireString(agent.id, 'Project Agent id');
+      const created = await requestResult(request, {
+        path: '/api/projects',
+        token,
+        method: 'POST',
+        data: { name: `Project admission ${suffix}`, instructions: marker },
+      });
+      expectSuccess(created, 201);
+      projectId = requireString(asObject(created.body)._id, 'Project id');
+      await setRuntimeFilters(request, token, {
+        agentInstructions: {
+          pii: {
+            fields: ['instructions'],
+            starterPatterns: [],
+            customPatterns: [
+              { id: `project-guidance-${suffix}`, label: 'Project guidance', regex: marker },
+            ],
+          },
+        },
+      } as FiltersConfig);
+      const messageId = randomUUID();
+      const sendProjectTurn = () =>
+        requestResult(request, {
+          path: '/api/agents/chat/agents',
+          token,
+          method: 'POST',
+          data: {
+            text: 'Apply the Project instructions.',
+            sender: 'User',
+            clientTimestamp: new Date().toISOString(),
+            isCreatedByUser: true,
+            parentMessageId: NO_PARENT,
+            conversationId: 'new',
+            clientRequestId: suffix,
+            messageId,
+            responseMessageId: `${messageId}_response`,
+            endpoint: 'agents',
+            endpointType: 'agents',
+            agent_id: agentId,
+            chatProjectId: projectId,
+            files: [],
+            isTemporary: false,
+            isRegenerate: false,
+            error: false,
+          },
+        });
+
+      const blocked = await expectNoMongoSideEffects(
+        ['conversations', 'messages'],
+        sendProjectTurn,
+      );
+      expectContentFilterBlock(blocked, {
+        source: 'agent_instruction',
+        field: 'instructions',
+        marker,
+      });
+
+      const deleted = await requestResult(request, {
+        path: `/api/projects/${projectId}`,
+        token,
+        method: 'DELETE',
+      });
+      expectSuccess(deleted, 200);
+      const missing = await expectNoMongoSideEffects(
+        ['conversations', 'messages'],
+        sendProjectTurn,
+      );
+      expect(missing.status, missing.text).toBe(404);
+      expect(missing.body).not.toHaveProperty('streamId');
+    } finally {
+      await restoreRuntimeFilters(request, token);
+      if (projectId) {
+        await requestResult(request, {
+          path: `/api/projects/${projectId}`,
+          token,
+          method: 'DELETE',
+        });
+      }
+      await cleanupFixtures(request, token, fixtures);
+    }
+  });
+
   test('rechecks canonical Project file text after policy activation', async ({ request }) => {
     const token = await loginAdmin(request);
     const suffix = randomUUID();

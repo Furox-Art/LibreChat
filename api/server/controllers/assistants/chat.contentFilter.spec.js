@@ -17,6 +17,7 @@ const mockHandleError = jest.fn();
 const mockRetrieveAssistant = jest.fn();
 const mockListThreadMessages = jest.fn();
 const mockGetConvo = jest.fn();
+const mockGetChatProject = jest.fn();
 const mockGetFiles = jest.fn();
 const mockGetOpenAIClient = jest.fn().mockResolvedValue({
   openai: {
@@ -124,6 +125,7 @@ jest.mock('~/models', () => ({
   getTransactions: (...args) => mockGetTransactions(...args),
   getMultiplier: jest.fn(),
   getConvo: (...args) => mockGetConvo(...args),
+  getChatProject: (...args) => mockGetChatProject(...args),
   getFiles: (...args) => mockGetFiles(...args),
 }));
 
@@ -171,6 +173,7 @@ describe.each([
     });
     mockGetFiles.mockReset().mockResolvedValue([]);
     mockGetConvo.mockReset().mockResolvedValue(null);
+    mockGetChatProject.mockReset().mockResolvedValue(null);
     mockInitThread.mockReset();
     closeHandler = undefined;
     req = {
@@ -302,6 +305,44 @@ describe.each([
     expect(mockResolveChatProjectContext).toHaveBeenCalledTimes(1);
     expect(mockGetOpenAIClient).not.toHaveBeenCalled();
     expect(mockValidateAuthor).not.toHaveBeenCalled();
+  });
+  it('passes authorized project guidance to the provider without loading project resources', async () => {
+    const project = {
+      _id: 'project-a',
+      instructions: 'Project instructions for the provider',
+      contextRevision: 4,
+      file_ids: ['unused-project-file'],
+    };
+    req.body.endpoint = 'azureAssistants';
+    req.body.endpointOption = { chatProjectId: 'project-a' };
+    mockGetChatProject.mockResolvedValueOnce(project);
+    mockGetFiles.mockRejectedValueOnce(new Error('unused project file lookup must not run'));
+    mockResolveChatProjectContext.mockImplementationOnce(
+      jest.requireActual('../../../../packages/api/dist/index.cjs').resolveChatProjectContext,
+    );
+    mockInitThread.mockResolvedValueOnce({ thread_id: 'thread-existing' });
+    mockGetOpenAIClient.mockResolvedValueOnce({
+      openai: {
+        _options: { model: 'gpt-4' },
+        responseMessage: { messageId: 'response-message' },
+        beta: {
+          assistants: { retrieve: mockRetrieveAssistant },
+          threads: { messages: { list: mockListThreadMessages }, runs: {} },
+        },
+      },
+    });
+    mockCreateRun.mockRejectedValueOnce(new Error('stop after provider request'));
+
+    await chatController(req, res);
+
+    expect(mockGetFiles).not.toHaveBeenCalled();
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          additional_instructions: expect.stringContaining(project.instructions),
+        }),
+      }),
+    );
   });
 
   it('blocks paged historical user text before thread, message, run, or stream side effects', async () => {

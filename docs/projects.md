@@ -67,16 +67,18 @@ The initial supported representation is **File Search**:
 - Project resolution reads canonical metadata without file bodies. When an active file policy
   applies, File Search admission rechecks canonical contents before tool setup and reuses the
   inspected snapshot without adding the full text to the model prompt.
-- Hosted Assistants receive Project instructions but do not receive these RAG resources. Their
-  provider-managed thread/vector-store resources are a separate representation.
+- Hosted Assistants resolve only Project membership and instructions, without querying unused
+  Project file records. Their provider-managed thread/vector-store resources are a separate
+  representation and retain their own content-policy checks.
 
 Indexing is synchronous in the existing upload pipeline. **Processing** and **Failed** describe
 that upload attempt in the workspace. A failed attempt is not represented as a successfully
 attached file. Persisted references are **Ready** when their canonical record is eligible and
 indexed, or **Unavailable** when missing, expired, or no longer eligible. These states are not
 inferred from the unrelated rich-preview processing status.
-Failed uploads show the server's user-facing rejection reason when available, with a generic
-fallback for unexpected errors. Retrying a failed association reuses the already-uploaded file.
+Failed uploads and associations show the server's user-facing rejection reason when available,
+with a generic fallback for unexpected errors. Retrying a failed association reuses the
+already-uploaded file.
 
 Only a successful reference attachment consumes the temporary upload hold. Rejected additions,
 including capacity-race losers, retain their cleanup deadline. `expiredAt` remains authoritative
@@ -148,6 +150,11 @@ Instructions are limited to 16,000 characters and Project resources to 50 files.
 are atomic, idempotent, and bounded even under concurrent writes. Invalid instructions are rejected,
 not silently truncated. Inaccessible Projects return not found; unavailable/ineligible file
 associations are rejected, and exceeding the resource limit returns a conflict.
+
+Normal Agent chats validate Project access and guidance before creating a generation job.
+Unavailable Projects return HTTP 404; rejected instructions return the structured HTTP 400
+`content_filter_block` response without persisting a failed turn. Other provider/model startup
+failures retain the existing failed-turn history behavior.
 
 Project lists return `hasInstructions` and `fileCount` summaries instead of full instructions and
 resource arrays. Project details contain `instructions`, `contextRevision`, and `file_ids`.
