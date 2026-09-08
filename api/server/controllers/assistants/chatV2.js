@@ -16,6 +16,7 @@ const {
   assertModelBoundContent,
   resolveChatProjectContext,
   formatChatProjectInstructions,
+  CHAT_PROJECT_CONTEXT_UNAVAILABLE,
 } = require('@librechat/api');
 const {
   Time,
@@ -627,6 +628,10 @@ const chatV2 = async (req, res) => {
       });
     }
   } catch (error) {
+    if (!res.headersSent && error?.message === CHAT_PROJECT_CONTEXT_UNAVAILABLE) {
+      contentRejected = true;
+      return res.status(404).json({ error: 'Conversation context unavailable' });
+    }
     await handleError(error);
   }
 };

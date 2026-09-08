@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { FileContext } from 'librechat-data-provider';
-import { createModels } from '@librechat/data-schemas';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import { createModels, createMethods } from '@librechat/data-schemas';
 import type { IChatProject, IMongoFile } from '@librechat/data-schemas';
 import type { GetProjectFiles } from './resources';
 import {
@@ -9,6 +9,7 @@ import {
   listChatProjectFileViews,
   resolveChatProjectFiles,
 } from './resources';
+import { getChatProjectContextKey, resolveChatProjectContext } from './context';
 
 let mongoServer: InstanceType<typeof MongoMemoryServer>;
 let File: mongoose.Model<IMongoFile>;
@@ -35,6 +36,7 @@ afterAll(async () => {
 
 afterEach(async () => {
   await File.deleteMany({});
+  await mongoose.models.ChatProject.deleteMany({});
 });
 
 const file = (
@@ -58,6 +60,36 @@ const file = (
 });
 
 describe('ChatProject resource hydration', () => {
+  it('preserves Project compatibility when signed file URLs are refreshed', async () => {
+    const owner = new mongoose.Types.ObjectId().toString();
+    const methods = createMethods(mongoose);
+    const fileId = 'signed-reference';
+    const originalUrl = 'https://bucket.s3.amazonaws.com/reference.txt?X-Amz-Signature=original';
+    const refreshedUrl = 'https://bucket.s3.amazonaws.com/reference.txt?X-Amz-Signature=refreshed';
+    await File.create(file(fileId, owner, { source: 's3', filepath: originalUrl }));
+    await File.updateOne(
+      { file_id: fileId },
+      { $set: { updatedAt: new Date('2020-01-01') } },
+      { timestamps: false },
+    );
+    const project = await methods.createChatProject(owner, { name: 'Signed reference' });
+    const projectId = project._id!.toString();
+    await methods.addChatProjectFile(owner, projectId, fileId);
+    const input = { userId: owner, requestedProjectId: projectId };
+    const before = await resolveChatProjectContext(input, methods);
+
+    await methods.batchUpdateFiles([{ file_id: fileId, filepath: refreshedUrl }]);
+    const after = await resolveChatProjectContext(input, methods);
+
+    expect(after?.resources).toEqual([
+      expect.objectContaining({
+        availability: 'ready',
+        file: expect.objectContaining({ filepath: refreshedUrl }),
+      }),
+    ]);
+    expect(getChatProjectContextKey(after)).toBe(getChatProjectContextKey(before));
+  });
+
   it('only marks canonical unscoped message attachments ready', () => {
     expect(
       getChatProjectFileAvailability(

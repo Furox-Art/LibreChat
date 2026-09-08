@@ -306,6 +306,25 @@ describe.each([
     expect(mockGetOpenAIClient).not.toHaveBeenCalled();
     expect(mockValidateAuthor).not.toHaveBeenCalled();
   });
+  it('returns not found for an unavailable Project without provider or close-handler effects', async () => {
+    req.body.endpointOption = { chatProjectId: 'missing-project' };
+    mockResolveChatProjectContext.mockImplementationOnce(
+      jest.requireActual('../../../../packages/api/dist/index.cjs').resolveChatProjectContext,
+    );
+    await chatController(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(mockGetOpenAIClient).not.toHaveBeenCalled();
+    expect(mockInitThread).not.toHaveBeenCalled();
+    expect(mockSaveUserMessage).not.toHaveBeenCalled();
+    expect(mockCreateRun).not.toHaveBeenCalled();
+    expect(mockRunAssistant).not.toHaveBeenCalled();
+    expect(mockStreamRunManager).not.toHaveBeenCalled();
+    await closeHandler();
+    expect(mockHandleError).not.toHaveBeenCalled();
+    expect(mockSendResponse).not.toHaveBeenCalled();
+  });
+
   it('passes authorized project guidance to the provider without loading project resources', async () => {
     const project = {
       _id: 'project-a',

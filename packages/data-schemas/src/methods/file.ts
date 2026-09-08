@@ -920,7 +920,7 @@ export function createFileMethods(mongoose: typeof import('mongoose')): {
       },
     }));
 
-    const result = await tenantSafeBulkWrite(File, bulkOperations);
+    const result = await tenantSafeBulkWrite(File, bulkOperations, { timestamps: false });
     logger.info(`Updated ${result.modifiedCount} files with new S3 URLs`);
   }
 

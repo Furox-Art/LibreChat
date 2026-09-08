@@ -135,7 +135,6 @@ function canonicalResourceVersion(
         status: file.status ?? null,
         bytes: file.bytes,
         filename: file.filename,
-        filepath: file.filepath,
         type: file.type,
       }),
     )

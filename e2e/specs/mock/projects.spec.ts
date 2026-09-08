@@ -118,6 +118,25 @@ test.describe('chat projects', () => {
     };
 
     try {
+      const missingProject = await request.post('/api/assistants/v2/chat', {
+        headers,
+        data: {
+          text: 'Apply the project policy.',
+          sender: 'User',
+          isCreatedByUser: true,
+          conversationId: null,
+          parentMessageId: '00000000-0000-0000-0000-000000000000',
+          messageId: randomUUID(),
+          endpoint: 'assistants',
+          endpointType: 'assistants',
+          model: 'gpt-4o-mini',
+          assistant_id: assistantId,
+          chatProjectId: randomUUID().replace(/-/g, '').slice(0, 24),
+          files: [],
+        },
+      });
+      expect(missingProject.status()).toBe(404);
+
       const firstTurn = await sendTurn();
       const conversationId = firstTurn.match(/"conversationId":"([^"]+)"/)?.[1];
       expect(conversationId).toBeTruthy();

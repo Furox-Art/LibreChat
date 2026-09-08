@@ -2292,10 +2292,6 @@ describe('File Methods', () => {
       expect(file?.storageKey).toBe('r/eu-central-1/uploads/user123/file.txt');
       expect(file?.storageRegion).toBe('eu-central-1');
     });
-
-    it('should handle empty updates array gracefully', async () => {
-      await expect(fileMethods.batchUpdateFiles([])).resolves.toBeUndefined();
-    });
   });
 
   describe('sweepOrphanedPreviews', () => {

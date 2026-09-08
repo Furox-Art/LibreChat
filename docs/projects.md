@@ -111,8 +111,8 @@ Changed context follows the existing incompatible-checkpoint cold reconstruction
 
 Canonical resource availability and identity/version also participate in compatibility. Expired,
 deleted, ineligible, or replaced files invalidate paused context even when the Project's revision
-and reference IDs are unchanged. Usage and temporary-hold bookkeeping do not advance file content
-timestamps.
+and reference IDs are unchanged. Usage, temporary-hold bookkeeping, and signed S3 URL refreshes do
+not advance file content timestamps. Expiring download URLs are not part of the compatibility key.
 
 Paused approval/question runs retain a server-private Project context key. The winning resume
 claim re-resolves current conversation membership and Project context. If incompatible, it
@@ -152,9 +152,10 @@ not silently truncated. Inaccessible Projects return not found; unavailable/inel
 associations are rejected, and exceeding the resource limit returns a conflict.
 
 Normal Agent chats validate Project access and guidance before creating a generation job.
-Unavailable Projects return HTTP 404; rejected instructions return the structured HTTP 400
-`content_filter_block` response without persisting a failed turn. Other provider/model startup
-failures retain the existing failed-turn history behavior.
+Unavailable Projects return HTTP 404 in both Agent and hosted Assistant chat endpoints.
+Rejected Project guidance in Agent chats returns the structured HTTP 400 `content_filter_block` response
+without persisting a failed turn. Other provider/model startup failures retain the existing
+failed-turn history behavior.
 
 Project lists return `hasInstructions` and `fileCount` summaries instead of full instructions and
 resource arrays. Project details contain `instructions`, `contextRevision`, and `file_ids`.
