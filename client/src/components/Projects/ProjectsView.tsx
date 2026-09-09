@@ -38,11 +38,9 @@ function formatActivity(project: TChatProject) {
 
 function ProjectCard({
   project,
-  index,
   onOpen,
 }: {
   project: TChatProject;
-  index: number;
   onOpen: (projectId: string) => void;
 }) {
   const localize = useLocalize();
@@ -76,9 +74,7 @@ function ProjectCard({
       className={cn(
         'group/project relative flex min-h-[9.5rem] min-w-0 max-w-full flex-col rounded-2xl border border-border-light bg-surface-secondary',
         'transition-colors duration-150 ease-out hover:bg-surface-hover',
-        'motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 motion-safe:fill-mode-both',
       )}
-      style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
     >
       {isEditOpen ? (
         <div className="min-w-0 p-4 pr-12">
@@ -248,11 +244,10 @@ export default function ProjectsView() {
           {isLoading && <ProjectGridSkeleton />}
           {!isLoading && projects.length > 0 && (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-3">
-              {projects.map((project, index) => (
+              {projects.map((project) => (
                 <ProjectCard
                   key={project._id}
                   project={project}
-                  index={index}
                   onOpen={(projectId) => navigate(`/projects/${projectId}`)}
                 />
               ))}
