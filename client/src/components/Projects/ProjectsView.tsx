@@ -1,19 +1,11 @@
 import { useDeferredValue, useEffect, useId, useMemo, useRef, useState } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Input, Button, Skeleton, DropdownPopup } from '@librechat/client';
-import {
-  ArrowUpDown,
-  Check,
-  Ellipsis,
-  Folder,
-  FolderPlus,
-  Pencil,
-  Search,
-  Trash2,
-} from 'lucide-react';
+import { Button, DropdownPopup, Skeleton } from '@librechat/client';
+import { Ellipsis, Folder, FolderPlus, Pencil, Trash2 } from 'lucide-react';
 import type { TChatProject } from 'librechat-data-provider';
-import type { LocalizeFunction, MenuItemProps, RenderProp } from '~/common';
+import type { LocalizeFunction, MenuItemProps } from '~/common';
+import type { ProjectSort } from './ProjectsNavBar';
 import { useProjectsInfiniteQuery } from '~/data-provider';
 import ProjectCreateDialog from './ProjectCreateDialog';
 import ProjectDeleteDialog from './ProjectDeleteDialog';
@@ -21,23 +13,6 @@ import ProjectsNavBar from './ProjectsNavBar';
 import ProjectEditor from './ProjectEditor';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
-
-type ProjectSort = 'name' | 'createdAt' | 'lastConversationAt';
-
-function renderSortMenuItem(label: string, isSelected: boolean): RenderProp {
-  return function SortMenuItem({ className, ...props }) {
-    return (
-      <div {...props} className={cn(className, 'justify-between gap-5')}>
-        <span className="truncate">{label}</span>
-        {isSelected ? (
-          <Check className="h-4 w-4 shrink-0 text-text-primary" aria-hidden="true" />
-        ) : (
-          <span className="h-4 w-4 shrink-0" aria-hidden="true" />
-        )}
-      </div>
-    );
-  };
-}
 
 function getProjectCountLabel(count: number, hasMore: boolean, localize: LocalizeFunction) {
   if (hasMore) {
@@ -190,7 +165,7 @@ function ProjectCard({
 
 function ProjectGridSkeleton() {
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-hidden="true">
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-3" aria-hidden="true">
       {Array.from({ length: 6 }, (_, index) => (
         <div
           key={index}
@@ -213,8 +188,6 @@ export default function ProjectsView() {
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<ProjectSort>('lastConversationAt');
   const [isCreating, setIsCreating] = useState(searchParams.get('new') === '1');
-  const sortMenuId = useId();
-  const [isSortMenuOpen, setIsSortMenuOpen] = useState(false);
   const deferredSearch = useDeferredValue(search);
 
   const { data, fetchNextPage, isFetchingNextPage, isLoading } = useProjectsInfiniteQuery({
@@ -225,31 +198,6 @@ export default function ProjectsView() {
 
   const projects = useMemo(() => data?.pages.flatMap((page) => page.projects) ?? [], [data?.pages]);
   const hasNextPage = data?.pages[data.pages.length - 1]?.nextCursor != null;
-  const sortOptions = useMemo(
-    () => [
-      { value: 'lastConversationAt' as const, label: localize('com_ui_latest_activity') },
-      { value: 'createdAt' as const, label: localize('com_ui_sort_created') },
-      { value: 'name' as const, label: localize('com_ui_name') },
-    ],
-    [localize],
-  );
-  const selectedSortLabel =
-    sortOptions.find((option) => option.value === sortBy)?.label ??
-    localize('com_ui_latest_activity');
-  const sortMenuItems = useMemo<MenuItemProps[]>(
-    () =>
-      sortOptions.map((option) => {
-        const isSelected = sortBy === option.value;
-        return {
-          id: `project-sort-${option.value}`,
-          ariaLabel: option.label,
-          ariaChecked: isSelected,
-          onClick: () => setSortBy(option.value),
-          render: renderSortMenuItem(option.label, isSelected),
-        };
-      }),
-    [sortBy, sortOptions],
-  );
 
   /** `projects` only holds the pages fetched so far, so while another page
    *  exists this is a lower bound rather than the total. */
@@ -272,50 +220,16 @@ export default function ProjectsView() {
 
   return (
     <main className="flex h-full min-h-0 flex-col overflow-auto bg-presentation text-text-primary">
-      <ProjectsNavBar onCreate={() => setIsCreating(true)} />
+      <ProjectsNavBar
+        onCreate={() => setIsCreating(true)}
+        search={search}
+        onSearchChange={setSearch}
+        sortBy={sortBy}
+        onSortChange={setSortBy}
+      />
 
-      <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4 pb-10 pt-6 md:px-6 md:pt-8">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <label className="relative min-w-0 flex-1">
-            <span className="sr-only">{localize('com_ui_search_projects')}</span>
-            <Search
-              className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary"
-              aria-hidden="true"
-            />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder={localize('com_ui_search_projects')}
-              className="h-11 rounded-xl bg-surface-secondary pl-10"
-            />
-          </label>
-          <DropdownPopup
-            portal={true}
-            focusLoop={true}
-            unmountOnHide={true}
-            menuId={sortMenuId}
-            isOpen={isSortMenuOpen}
-            setIsOpen={setIsSortMenuOpen}
-            className="z-[125] min-w-56"
-            trigger={
-              <Ariakit.MenuButton
-                aria-label={localize('com_ui_sort_projects_by')}
-                className={cn(
-                  'inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl px-3 text-sm font-medium text-text-secondary transition-colors',
-                  'hover:bg-surface-hover hover:text-text-primary',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-text-primary',
-                  isSortMenuOpen && 'bg-surface-hover text-text-primary',
-                )}
-              >
-                <ArrowUpDown className="h-4 w-4 shrink-0" aria-hidden="true" />
-                <span className="truncate">{selectedSortLabel}</span>
-              </Ariakit.MenuButton>
-            }
-            items={sortMenuItems}
-          />
-        </div>
-
-        <div className="mt-8 flex items-baseline justify-between gap-3">
+      <div className="flex w-full flex-1 flex-col px-4 pb-10 pt-6 md:px-6 md:pt-8">
+        <div className="flex items-baseline justify-between gap-3">
           <h2 className="text-sm font-medium text-text-primary">
             {localize('com_ui_your_projects')}
           </h2>
@@ -333,7 +247,7 @@ export default function ProjectsView() {
         <div className="mt-4 flex flex-1 flex-col">
           {isLoading && <ProjectGridSkeleton />}
           {!isLoading && projects.length > 0 && (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(17rem,1fr))] gap-3">
               {projects.map((project, index) => (
                 <ProjectCard
                   key={project._id}
