@@ -175,8 +175,9 @@ jest.mock('@librechat/agents', () => ({
 jest.mock('@librechat/api', () => ({
   /* Provisioning moved into this package; the controllers build the callback from it. */
   createProvisionFilesCallback: () => async () => {},
-  resolveChatProjectContext: jest.fn().mockResolvedValue(null),
+  CHAT_PROJECT_CONTEXT_UNAVAILABLE: 'Project context unavailable',
   createAgentExecutionContext: (context) => context,
+  resolveChatProjectContext: jest.fn().mockResolvedValue(null),
   /** Grants both by default; the capability set is what these specs vary. */
   resolveToolRoleGrants: jest.fn(async () => ({ runCode: true, fileSearch: true })),
   collectReachableAgents: (roots) => {
@@ -1224,7 +1225,7 @@ describe('OpenAIChatCompletionController', () => {
 
     it('should return 404 when conversation is not owned by user', async () => {
       const { validateRequest } = require('@librechat/api');
-      const { getConvo } = require('~/models');
+      const { getConvo, getAgent } = require('~/models');
       validateRequest.mockReturnValueOnce({
         request: {
           model: 'agent-123',
@@ -1234,11 +1235,70 @@ describe('OpenAIChatCompletionController', () => {
         },
       });
       getConvo.mockResolvedValueOnce(null);
-
+      getAgent.mockRejectedValueOnce(new Error('speculative agent lookup failed'));
       await OpenAIChatCompletionController(req, res);
       expect(getConvo).toHaveBeenCalledWith('user-123', 'convo-abc');
       expect(res.status).toHaveBeenCalledWith(404);
     });
+    it('starts the agent read while owner-scoped conversation validation is in flight', async () => {
+      const api = require('@librechat/api');
+      const models = require('~/models');
+      models.getConvo.mockResolvedValueOnce({ conversationId: 'convo-abc', user: 'user-123' });
+      let resolveAgent;
+      models.getAgent.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveAgent = resolve;
+          }),
+      );
+      api.resolveChatProjectContext.mockImplementationOnce(async () => {
+        expect(models.getAgent).toHaveBeenCalledWith({ id: 'agent-123' });
+        resolveAgent({ id: 'agent-123', name: 'Test Agent' });
+        return null;
+      });
+      api.validateRequest.mockReturnValueOnce({
+        request: {
+          model: 'agent-123',
+          messages: [],
+          stream: false,
+          conversation_id: 'convo-abc',
+        },
+      });
+
+      await OpenAIChatCompletionController(req, res);
+
+      expect(models.getAgent.mock.invocationCallOrder[0]).toBeLessThan(
+        models.getConvo.mock.invocationCallOrder[0],
+      );
+      expect(api.initializeAgent).toHaveBeenCalled();
+    });
+
+    it('keeps Project-unavailable errors as client not-found responses', async () => {
+      const api = require('@librechat/api');
+      const models = require('~/models');
+      api.validateRequest.mockReturnValueOnce({
+        request: {
+          model: 'agent-123',
+          messages: [],
+          stream: false,
+          conversation_id: 'convo-abc',
+        },
+      });
+      models.getConvo.mockResolvedValueOnce({ conversationId: 'convo-abc', user: 'user-123' });
+      models.getAgent.mockRejectedValueOnce(new Error('speculative agent lookup failed'));
+      api.resolveChatProjectContext.mockRejectedValueOnce(
+        new Error(api.CHAT_PROJECT_CONTEXT_UNAVAILABLE),
+      );
+
+      await OpenAIChatCompletionController(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      const errorCall = api.createErrorResponse.mock.calls.at(-1);
+      expect(errorCall[1]).toBe('invalid_request_error');
+      expect(errorCall[2]).toBeNull();
+      expect(api.initializeAgent).not.toHaveBeenCalled();
+    });
+
     it('rechecks conversation existence after enrollment before initializing a provider', async () => {
       const api = require('@librechat/api');
       const models = require('~/models');
@@ -1287,7 +1347,7 @@ describe('OpenAIChatCompletionController', () => {
     });
 
     it('should return 500 when getConvo throws a DB error', async () => {
-      const { validateRequest } = require('@librechat/api');
+      const { validateRequest, createErrorResponse } = require('@librechat/api');
       const { getConvo } = require('~/models');
       validateRequest.mockReturnValueOnce({
         request: {
@@ -1301,6 +1361,7 @@ describe('OpenAIChatCompletionController', () => {
 
       await OpenAIChatCompletionController(req, res);
       expect(res.status).toHaveBeenCalledWith(500);
+      expect(createErrorResponse.mock.calls.at(-1)[1]).toBe('server_error');
     });
   });
 

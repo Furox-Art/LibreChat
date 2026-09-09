@@ -76,8 +76,9 @@ async function saveUserMessage(req, params) {
     tokenCount,
   };
 
-  // The resolver is authoritative; saveConvo applies this membership only on insert.
-  const chatProjectId = req?.chatProjectContext?.projectId;
+  // Only confirmed new conversations seed membership; saveConvo applies it on insert.
+  const chatProjectId =
+    req?.resolvedConversation === null ? req.chatProjectContext?.projectId : undefined;
   const convo = {
     endpoint: params.endpoint,
     conversationId: params.conversationId,

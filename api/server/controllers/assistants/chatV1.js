@@ -276,6 +276,7 @@ const chatV1 = async (req, res) => {
     if (existingConversation === undefined) {
       existingConversation = convoId ? await getConvo(req.user.id, convoId) : null;
     }
+    req.resolvedConversation = existingConversation;
     const projectContext = await resolveChatProjectContext(
       {
         userId: req.user.id,

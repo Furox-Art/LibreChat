@@ -84,6 +84,7 @@ const {
   waitForAgentExecutionWrites,
   resolveToolRoleGrants,
   resolveChatProjectContext,
+  CHAT_PROJECT_CONTEXT_UNAVAILABLE,
 } = require('@librechat/api');
 const {
   createResponsesToolEndCallback,
@@ -655,6 +656,10 @@ const executeResponse = async (envelope, { req, res }) => {
     },
     handleExecutionError: (error) => handleExecutionError({ error, res, appConfig }),
     execute: async (execution) => {
+      const agentPromise = db.getAgent({ id: agentId });
+      // Validation may return before this promise is awaited; preserve the original
+      // promise for the later await while avoiding an unhandled speculative rejection.
+      agentPromise.catch(() => {});
       let resolvedConversation;
       if (request.previous_response_id != null) {
         try {
@@ -688,14 +693,14 @@ const executeResponse = async (envelope, { req, res }) => {
           );
           return sendResponsesErrorResponse(
             res,
-            error?.message === 'Project context unavailable' ? 404 : 500,
+            error?.message === CHAT_PROJECT_CONTEXT_UNAVAILABLE ? 404 : 500,
             'Conversation context unavailable',
-            'server_error',
+            error?.message === CHAT_PROJECT_CONTEXT_UNAVAILABLE ? 'not_found' : 'server_error',
           );
         }
       }
 
-      const agent = await db.getAgent({ id: agentId });
+      const agent = await agentPromise;
       if (!agent) {
         return sendResponsesErrorResponse(
           res,

@@ -548,6 +548,82 @@ describe('persistent Project context', () => {
     expect((await methods.listChatProjects(owner)).projects[0].hasInstructions).toBe(false);
   });
 
+  it('preserves newer instructions and revisions when a metadata fallback follows a lost conditional update', async () => {
+    const project = await methods.createChatProject(owner, {
+      name: 'Original metadata',
+      instructions: 'Guidance A',
+    });
+    const id = project._id!.toString();
+
+    let signalConditionalMiss!: () => void;
+    const conditionalMiss = new Promise<void>((resolve) => {
+      signalConditionalMiss = resolve;
+    });
+    let releaseFallback!: () => void;
+    const fallbackRelease = new Promise<void>((resolve) => {
+      releaseFallback = resolve;
+    });
+
+    const findOneAndUpdate = ChatProject.findOneAndUpdate.bind(ChatProject);
+    const updateSpy = jest
+      .spyOn(ChatProject, 'findOneAndUpdate')
+      .mockImplementation((filter, update, options) => {
+        const query = findOneAndUpdate(filter, update, options);
+        const queryFilter = query.getFilter();
+        if (
+          queryFilter._id?.toString() !== id ||
+          queryFilter.user !== owner ||
+          queryFilter.instructions == null
+        ) {
+          return query;
+        }
+
+        const exec = query.exec.bind(query);
+        jest.spyOn(query, 'exec').mockImplementation(async () => {
+          const result = await exec();
+          if (!result) {
+            signalConditionalMiss();
+            await fallbackRelease;
+          }
+          return result;
+        });
+        return query;
+      });
+
+    let staleUpdate: Promise<IChatProject | null> | undefined;
+    try {
+      staleUpdate = methods.updateChatProject(owner, id, {
+        name: 'Metadata winner',
+        instructions: 'Guidance A',
+      });
+      await Promise.race([
+        conditionalMiss,
+        staleUpdate.then(() => {
+          throw new Error('The unchanged instruction update did not reach its metadata fallback');
+        }),
+      ]);
+
+      const concurrentWrite = await methods.updateChatProject(owner, id, {
+        instructions: 'Guidance B',
+      });
+      expect(concurrentWrite?.instructions).toBe('Guidance B');
+
+      releaseFallback();
+      await staleUpdate;
+    } finally {
+      releaseFallback();
+      updateSpy.mockRestore();
+      await staleUpdate?.catch(() => undefined);
+    }
+
+    const persisted = await methods.getChatProject(owner, id);
+    expect(persisted).toMatchObject({
+      name: 'Metadata winner',
+      instructions: 'Guidance B',
+      contextRevision: (project.contextRevision ?? 0) + 1,
+    });
+  });
+
   it('rejects excessive instructions without truncating or changing saved context', async () => {
     const instructions = 'x'.repeat(MAX_CHAT_PROJECT_INSTRUCTIONS_LENGTH);
     const project = await methods.createChatProject(owner, { name: 'At limit', instructions });
