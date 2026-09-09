@@ -683,6 +683,29 @@ const processFileUpload = async ({ req, res, metadata, sseStream, openai: provid
     openai,
   });
 
+  const rollbackAssistantProviderUpload = async () => {
+    const cleanup = [];
+    if (!metadata.message_file && !metadata.tool_resource) {
+      cleanup.push(openai.beta.assistants.files.del(metadata.assistant_id, id));
+    } else if (!metadata.message_file) {
+      cleanup.push(
+        deleteResourceFileId({
+          req,
+          openai,
+          file_id: id,
+          assistant_id: metadata.assistant_id,
+          tool_resource: metadata.tool_resource,
+        }),
+      );
+    }
+    cleanup.push(openai.files.del(id));
+    const results = await Promise.allSettled(cleanup);
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed) {
+      throw failed.reason;
+    }
+  };
+
   if (isAssistantUpload && !metadata.message_file && !metadata.tool_resource) {
     /** Authorized at the route before any bytes are sent — see
      *  `assertLegacyAssistantUploadAllowed` in `~/server/routes/files/files`. */
@@ -700,6 +723,7 @@ const processFileUpload = async ({ req, res, metadata, sseStream, openai: provid
   }
 
   let filepath = isAssistantUpload ? `${openai.baseURL}/files/${id}` : _filepath;
+  let persistedSource = source;
   let storageMetadata = getStorageMetadata({
     filepath,
     source,
@@ -714,6 +738,7 @@ const processFileUpload = async ({ req, res, metadata, sseStream, openai: provid
       returnFile: true,
     });
     filepath = result.filepath;
+    persistedSource = result.source;
     storageMetadata = getStorageMetadata({
       filepath,
       source: result.source,
@@ -737,7 +762,7 @@ const processFileUpload = async ({ req, res, metadata, sseStream, openai: provid
       type: file.mimetype,
       ...(await retentionExpiryPromise),
       embedded,
-      source,
+      source: persistedSource,
       height,
       width,
       tenantId: req.user.tenantId,
@@ -747,7 +772,23 @@ const processFileUpload = async ({ req, res, metadata, sseStream, openai: provid
      * Neither is exclusively owned by this write, so there is nothing here to undo;
      * detaching the provider-side file is tracked separately. */
     isAssistantUpload
-      ? null
+      ? async () => {
+          const cleanup = [rollbackAssistantProviderUpload()];
+          if (persistedSource !== source) {
+            cleanup.push(
+              deleteStoredBlob(req, {
+                source: persistedSource,
+                filepath,
+                ...storageMetadata,
+              }),
+            );
+          }
+          const results = await Promise.allSettled(cleanup);
+          const failed = results.find((item) => item.status === 'rejected');
+          if (failed) {
+            throw failed.reason;
+          }
+        }
       : () => deleteStoredBlob(req, { source, filepath, ...storageMetadata }),
   );
   sendUploadSuccess(res, sseStream, 'File uploaded and processed successfully', result);
@@ -1376,11 +1417,28 @@ const processAgentFileUpload = async ({ req, res, metadata, sseStream }) => {
 
   /* An image row points at a blob `processImageFile` already persisted under its own
    * quota-checked row, so only the non-image storage write is ours to undo. */
-  const result = await persistFile(
-    req,
-    fileInfo,
-    isImage ? null : () => deleteStoredBlob(req, { source, filepath, ...storageMetadata }),
-  );
+  const result = await persistFile(req, fileInfo, async () => {
+    const cleanup = [deleteStoredBlob(req, fileInfo)];
+    if (hasCodeEnvRef(fileInfo)) {
+      const { deleteFile: deleteCodeEnvFile } = getStrategyFunctions(FileSources.execute_code);
+      if (deleteCodeEnvFile) {
+        cleanup.push(deleteCodeEnvFile(req, fileInfo));
+      }
+    }
+    if (!messageAttachment && effectiveToolResource) {
+      cleanup.push(
+        db.removeAgentResourceFiles({
+          agent_id,
+          files: [{ file_id, tool_resource: effectiveToolResource }],
+        }),
+      );
+    }
+    const results = await Promise.allSettled(cleanup);
+    const failed = results.find((item) => item.status === 'rejected');
+    if (failed) {
+      throw failed.reason;
+    }
+  });
 
   sendUploadSuccess(res, sseStream, 'Agent file uploaded and processed successfully', result);
 };

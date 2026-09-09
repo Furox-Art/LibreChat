@@ -503,6 +503,15 @@ describe('flattenArtifactPath', () => {
 });
 
 describe('resolveUploadErrorMessage', () => {
+  it('preserves the actionable storage quota message', () => {
+    expect(
+      resolveUploadErrorMessage({
+        code: 'FILE_STORAGE_LIMIT_EXCEEDED',
+        message: 'storage limit exceeded. Delete files or ask an admin to raise the limit.',
+      }),
+    ).toBe('storage limit exceeded. Delete files or ask an admin to raise the limit.');
+  });
+
   test('returns default message for null error', () => {
     expect(resolveUploadErrorMessage(null)).toBe('Error processing file');
   });

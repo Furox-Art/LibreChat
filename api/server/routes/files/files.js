@@ -898,7 +898,7 @@ const handleFileUpload = async (req, res) => {
       logger.error('[/files] Error deleting file:', getSafeErrorMetadata(cleanupError));
     }
 
-    const userErrorStatusCode = error?.userErrorStatusCode;
+    const userErrorStatusCode = error?.userErrorStatusCode ?? error?.status;
     const errorStatusCode =
       Number.isInteger(userErrorStatusCode) &&
       userErrorStatusCode >= 400 &&
