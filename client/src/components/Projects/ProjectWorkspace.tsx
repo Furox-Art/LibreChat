@@ -2,16 +2,9 @@ import { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { useRecoilValue } from 'recoil';
 import * as Ariakit from '@ariakit/react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useDefaultLayout } from 'react-resizable-panels';
 import { Constants, QueryKeys } from 'librechat-data-provider';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import {
-  Button,
-  DropdownPopup,
-  EmptyState,
-  Spinner,
-  TooltipAnchor,
-  useMediaQuery,
-} from '@librechat/client';
 import {
   ArrowLeft,
   ArrowUpDown,
@@ -24,6 +17,17 @@ import {
   Plus,
   Trash2,
 } from 'lucide-react';
+import {
+  Button,
+  DropdownPopup,
+  EmptyState,
+  ResizableHandleAlt,
+  ResizablePanel,
+  ResizablePanelGroup,
+  Spinner,
+  TooltipAnchor,
+  useMediaQuery,
+} from '@librechat/client';
 import type { ConversationListResponse } from 'librechat-data-provider';
 import {
   useConversationsInfiniteQuery,
@@ -35,12 +39,16 @@ import OpenSidebar from '~/components/Chat/Menus/OpenSidebar';
 import ProjectDeleteDialog from './ProjectDeleteDialog';
 import { useLocalize, useNewConvo } from '~/hooks';
 import ProjectResources from './ProjectResources';
-import { clearMessagesCache, cn } from '~/utils';
+import { clearMessagesCache } from '~/utils';
 import ProjectChatList from './ProjectChatList';
 import ProjectEditor from './ProjectEditor';
 import store from '~/store';
 
 type ChatSortField = 'updatedAt' | 'createdAt';
+
+const WORKSPACE_PANEL_IDS = ['project-details', 'project-chats'];
+const DETAILS_PANEL_IDS_WITH_FILES = ['project-instructions', 'project-files'];
+const DETAILS_PANEL_IDS = ['project-instructions'];
 
 export default function ProjectWorkspace() {
   const localize = useLocalize();
@@ -70,6 +78,20 @@ export default function ProjectWorkspace() {
   const { newConversation } = useNewConvo();
   const activeProjectId = project?._id;
   const isSmallScreen = useMediaQuery('(max-width: 768px)');
+
+  /** Panel sizes are a workspace-wide preference, so they persist per browser
+   *  rather than per project; the files panel keys its own layout so hiding it
+   *  (no RAG service) does not overwrite the split used when it is present. */
+  const workspaceLayout = useDefaultLayout({
+    id: 'project-workspace-layout',
+    panelIds: WORKSPACE_PANEL_IDS,
+    storage: localStorage,
+  });
+  const detailsLayout = useDefaultLayout({
+    id: 'project-details-layout',
+    panelIds: isRagEnabled ? DETAILS_PANEL_IDS_WITH_FILES : DETAILS_PANEL_IDS,
+    storage: localStorage,
+  });
 
   const startEditing = (field: 'name' | 'description') => {
     setInitialEditField(field);
@@ -160,10 +182,169 @@ export default function ProjectWorkspace() {
     );
   }
 
+  const detailsHeader = isEditOpen ? (
+    <ProjectEditor
+      key={project._id}
+      project={project}
+      inputRef={nameInputRef}
+      initialField={initialEditField}
+      onDone={finishEditing}
+    />
+  ) : (
+    <div className="min-w-0">
+      <div className="flex min-w-0 items-start gap-4">
+        <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-surface-secondary text-text-secondary">
+          <Folder className="size-6" aria-hidden="true" />
+        </span>
+        <h1 className="min-w-0 flex-1">
+          <Button
+            ref={titleButtonRef}
+            type="button"
+            variant="ghost"
+            onClick={() => startEditing('name')}
+            className="h-auto min-h-12 w-full min-w-0 justify-start whitespace-normal px-0 py-1 text-left text-2xl font-semibold tracking-tight"
+          >
+            <span className="line-clamp-2 min-w-0 [overflow-wrap:anywhere] md:line-clamp-1">
+              {project.name}
+            </span>
+          </Button>
+        </h1>
+      </div>
+      <Button
+        ref={descriptionButtonRef}
+        type="button"
+        variant="ghost"
+        onClick={() => startEditing('description')}
+        className="mt-1 h-auto min-h-10 w-full min-w-0 justify-start whitespace-normal px-0 py-1 text-left text-sm font-normal leading-relaxed text-text-secondary"
+      >
+        <span className="line-clamp-3 min-w-0 [overflow-wrap:anywhere]">
+          {project.description || localize('com_ui_add_description')}
+        </span>
+      </Button>
+    </div>
+  );
+
+  const instructionsSection = (
+    <section
+      className="flex h-full min-h-0 min-w-0 flex-col rounded-2xl border border-border-light bg-surface-secondary p-4 sm:p-5"
+      aria-labelledby="project-instructions-heading"
+    >
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1">
+          <h2 id="project-instructions-heading" className="text-sm font-semibold text-text-primary">
+            {localize('com_ui_project_instructions')}
+          </h2>
+          <TooltipAnchor
+            description={localize('com_ui_project_instructions_future_turns')}
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="relative size-7 shrink-0 text-text-secondary after:absolute after:-inset-1.5"
+                aria-label={localize('com_ui_project_instructions_info')}
+              >
+                <Info className="size-3.5" aria-hidden="true" />
+              </Button>
+            }
+          />
+        </div>
+        <Button
+          ref={instructionsButtonRef}
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-label={localize('com_ui_project_edit_instructions')}
+          onClick={() => setIsInstructionsOpen(true)}
+        >
+          <Pencil className="size-4" aria-hidden="true" />
+          {localize('com_ui_edit')}
+        </Button>
+      </div>
+      <div
+        role="region"
+        aria-label={localize('com_ui_project_instructions_preview')}
+        tabIndex={project.instructions?.trim() ? 0 : undefined}
+        className="min-h-0 flex-1 overflow-y-auto rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-text-primary"
+      >
+        {project.instructions?.trim() ? (
+          <p className="whitespace-pre-wrap text-base leading-relaxed text-text-secondary [overflow-wrap:anywhere]">
+            {project.instructions}
+          </p>
+        ) : (
+          <EmptyState
+            icon={NotebookPen}
+            description={localize('com_ui_project_no_instructions')}
+            className="h-full border-0"
+          />
+        )}
+      </div>
+    </section>
+  );
+
+  const chatsSection = (
+    <section
+      className="flex h-full min-h-0 min-w-0 flex-col"
+      aria-labelledby="project-chats-heading"
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h2
+          id="project-chats-heading"
+          className="flex items-baseline gap-2 text-sm font-semibold text-text-primary"
+        >
+          {localize('com_ui_chats')}
+          <span className="tabular-nums text-text-secondary">{project.conversationCount}</span>
+        </h2>
+        <DropdownPopup
+          portal={true}
+          focusLoop={true}
+          unmountOnHide={true}
+          menuId={sortMenuId}
+          isOpen={isSortMenuOpen}
+          setIsOpen={setIsSortMenuOpen}
+          trigger={
+            <Ariakit.MenuButton
+              aria-label={localize('com_ui_sort_chats_by')}
+              className="aria-expanded:bg-surface-hover"
+              render={<Button type="button" variant="ghost" size="sm" />}
+            >
+              <ArrowUpDown className="size-4" aria-hidden="true" />
+              {selectedSortLabel}
+            </Ariakit.MenuButton>
+          }
+          items={sortOptions.map((option) => ({
+            label: option.label,
+            ariaChecked: sortBy === option.value,
+            icon:
+              sortBy === option.value ? (
+                <Check className="size-4 text-text-secondary" aria-hidden="true" />
+              ) : (
+                <span className="size-4" aria-hidden="true" />
+              ),
+            onClick: () => setSortBy(option.value),
+          }))}
+        />
+      </div>
+      <ProjectChatList
+        conversations={conversations}
+        isLoading={isConversationsLoading}
+        isFetchingNextPage={isFetchingNextPage}
+        hasNextPage={hasNextPage}
+        sortBy={sortBy}
+        emptyLabel={localize('com_ui_no_project_chats')}
+        loadMore={() => fetchNextPage()}
+      />
+    </section>
+  );
+
+  const filesSection = isRagEnabled ? (
+    <ProjectResources key={project._id} project={project} />
+  ) : null;
+
   return (
-    <main className="flex h-full min-h-0 min-w-0 flex-col overflow-y-auto bg-presentation text-text-primary">
+    <main className="flex h-full min-h-0 min-w-0 flex-col bg-presentation text-text-primary">
       <header className="sticky top-0 z-10 border-b border-border-light bg-presentation">
-        <div className="mx-auto flex h-14 w-full max-w-5xl items-center gap-2 px-4 md:h-16 md:px-6">
+        <div className="flex h-14 w-full items-center gap-2 px-4 md:h-16 md:px-6">
           {isSmallScreen ? <OpenSidebar className="size-9 shrink-0" /> : null}
           <Button
             type="button"
@@ -222,178 +403,84 @@ export default function ProjectWorkspace() {
         </div>
       </header>
 
-      <div className="mx-auto flex w-full min-w-0 max-w-5xl flex-1 flex-col px-4 py-6 md:px-6 md:py-8">
-        {isEditOpen ? (
-          <ProjectEditor
-            key={project._id}
-            project={project}
-            inputRef={nameInputRef}
-            initialField={initialEditField}
-            onDone={finishEditing}
-          />
-        ) : (
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-start gap-4">
-              <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-surface-secondary text-text-secondary">
-                <Folder className="size-6" aria-hidden="true" />
-              </span>
-              <h1 className="min-w-0 flex-1">
-                <Button
-                  ref={titleButtonRef}
-                  type="button"
-                  variant="ghost"
-                  onClick={() => startEditing('name')}
-                  className="h-auto min-h-12 w-full min-w-0 justify-start whitespace-normal px-0 py-1 text-left text-2xl font-semibold tracking-tight"
-                >
-                  <span className="line-clamp-2 min-w-0 [overflow-wrap:anywhere] md:line-clamp-1">
-                    {project.name}
-                  </span>
-                </Button>
-              </h1>
-            </div>
-            <Button
-              ref={descriptionButtonRef}
-              type="button"
-              variant="ghost"
-              onClick={() => startEditing('description')}
-              className="mt-2 h-auto min-h-10 w-full min-w-0 justify-start whitespace-normal px-0 py-1 text-left text-sm font-normal leading-relaxed text-text-secondary"
-            >
-              <span className="line-clamp-3 min-w-0 [overflow-wrap:anywhere]">
-                {project.description || localize('com_ui_add_description')}
-              </span>
-            </Button>
-          </div>
-        )}
+      <ProjectDeleteDialog
+        open={isDeleteOpen}
+        onOpenChange={setIsDeleteOpen}
+        project={project}
+        triggerRef={deleteMenuRef}
+      />
+      <ProjectInstructionsDialog
+        open={isInstructionsOpen}
+        onOpenChange={setIsInstructionsOpen}
+        project={project}
+        triggerRef={instructionsButtonRef}
+      />
 
-        <ProjectDeleteDialog
-          open={isDeleteOpen}
-          onOpenChange={setIsDeleteOpen}
-          project={project}
-          triggerRef={deleteMenuRef}
-        />
-        <ProjectInstructionsDialog
-          open={isInstructionsOpen}
-          onOpenChange={setIsInstructionsOpen}
-          project={project}
-          triggerRef={instructionsButtonRef}
-        />
-        <div
-          className={cn('mt-6 grid min-w-0 auto-rows-fr gap-4', isRagEnabled && 'lg:grid-cols-2')}
-        >
-          <section
-            className="min-w-0 rounded-2xl border border-border-light bg-surface-secondary p-4 sm:p-5"
-            aria-labelledby="project-instructions-heading"
-          >
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-1">
-                <h2
-                  id="project-instructions-heading"
-                  className="text-sm font-semibold text-text-primary"
-                >
-                  {localize('com_ui_project_instructions')}
-                </h2>
-                <TooltipAnchor
-                  description={localize('com_ui_project_instructions_future_turns')}
-                  render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="relative size-7 shrink-0 text-text-secondary after:absolute after:-inset-1.5"
-                      aria-label={localize('com_ui_project_instructions_info')}
-                    >
-                      <Info className="size-3.5" aria-hidden="true" />
-                    </Button>
-                  }
-                />
-              </div>
-              <Button
-                ref={instructionsButtonRef}
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-label={localize('com_ui_project_edit_instructions')}
-                onClick={() => setIsInstructionsOpen(true)}
-              >
-                <Pencil className="size-4" aria-hidden="true" />
-                {localize('com_ui_edit')}
-              </Button>
-            </div>
-            <div
-              role="region"
-              aria-label={localize('com_ui_project_instructions_preview')}
-              tabIndex={project.instructions?.trim() ? 0 : undefined}
-              className="h-48 overflow-y-auto rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-text-primary"
-            >
-              {project.instructions?.trim() ? (
-                <p className="whitespace-pre-wrap text-base leading-relaxed text-text-secondary [overflow-wrap:anywhere]">
-                  {project.instructions}
-                </p>
-              ) : (
-                <EmptyState
-                  icon={NotebookPen}
-                  description={localize('com_ui_project_no_instructions')}
-                  className="h-full border-0"
-                />
-              )}
-            </div>
-          </section>
-          {isRagEnabled && <ProjectResources key={project._id} project={project} />}
+      {isSmallScreen ? (
+        /** Panels need a bounded height to resize against, which a stacked phone
+         *  layout cannot give them; scroll the column instead. */
+        <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-6">
+          {detailsHeader}
+          <div className="h-72 shrink-0">{instructionsSection}</div>
+          {filesSection != null && <div className="h-72 shrink-0">{filesSection}</div>}
+          <div className="flex min-h-[420px] flex-col">{chatsSection}</div>
         </div>
-
-        <section
-          className="mt-8 flex min-h-0 flex-1 flex-col"
-          aria-labelledby="project-chats-heading"
+      ) : (
+        <ResizablePanelGroup
+          orientation="horizontal"
+          id="project-workspace"
+          defaultLayout={workspaceLayout.defaultLayout}
+          onLayoutChanged={workspaceLayout.onLayoutChanged}
+          className="min-h-0 flex-1"
         >
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h2
-              id="project-chats-heading"
-              className="flex items-baseline gap-2 text-sm font-semibold text-text-primary"
-            >
-              {localize('com_ui_chats')}
-              <span className="tabular-nums text-text-secondary">{project.conversationCount}</span>
-            </h2>
-            <DropdownPopup
-              portal={true}
-              focusLoop={true}
-              unmountOnHide={true}
-              menuId={sortMenuId}
-              isOpen={isSortMenuOpen}
-              setIsOpen={setIsSortMenuOpen}
-              trigger={
-                <Ariakit.MenuButton
-                  aria-label={localize('com_ui_sort_chats_by')}
-                  className="aria-expanded:bg-surface-hover"
-                  render={<Button type="button" variant="ghost" size="sm" />}
+          <ResizablePanel
+            id="project-details"
+            defaultSize="45"
+            minSize="25"
+            maxSize="70"
+            className="min-w-0"
+          >
+            <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 py-6 pl-4 pr-3 md:pl-6">
+              {detailsHeader}
+              <ResizablePanelGroup
+                orientation="vertical"
+                id="project-details-panels"
+                defaultLayout={detailsLayout.defaultLayout}
+                onLayoutChanged={detailsLayout.onLayoutChanged}
+                className="min-h-0 flex-1"
+              >
+                <ResizablePanel
+                  id="project-instructions"
+                  defaultSize="55"
+                  minSize="20"
+                  className="min-h-0"
                 >
-                  <ArrowUpDown className="size-4" aria-hidden="true" />
-                  {selectedSortLabel}
-                </Ariakit.MenuButton>
-              }
-              items={sortOptions.map((option) => ({
-                label: option.label,
-                ariaChecked: sortBy === option.value,
-                icon:
-                  sortBy === option.value ? (
-                    <Check className="size-4 text-text-secondary" aria-hidden="true" />
-                  ) : (
-                    <span className="size-4" aria-hidden="true" />
-                  ),
-                onClick: () => setSortBy(option.value),
-              }))}
-            />
-          </div>
-          <ProjectChatList
-            conversations={conversations}
-            isLoading={isConversationsLoading}
-            isFetchingNextPage={isFetchingNextPage}
-            hasNextPage={hasNextPage}
-            sortBy={sortBy}
-            emptyLabel={localize('com_ui_no_project_chats')}
-            loadMore={() => fetchNextPage()}
-          />
-        </section>
-      </div>
+                  <div className="h-full pb-3">{instructionsSection}</div>
+                </ResizablePanel>
+                {filesSection != null && (
+                  <>
+                    <ResizableHandleAlt withHandle />
+                    <ResizablePanel
+                      id="project-files"
+                      defaultSize="45"
+                      minSize="20"
+                      className="min-h-0"
+                    >
+                      <div className="h-full pt-3">{filesSection}</div>
+                    </ResizablePanel>
+                  </>
+                )}
+              </ResizablePanelGroup>
+            </div>
+          </ResizablePanel>
+          <ResizableHandleAlt withHandle />
+          <ResizablePanel id="project-chats" defaultSize="55" minSize="30" className="min-w-0">
+            <div className="flex h-full min-h-0 min-w-0 flex-col py-6 pl-3 pr-4 md:pr-6">
+              {chatsSection}
+            </div>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      )}
     </main>
   );
 }

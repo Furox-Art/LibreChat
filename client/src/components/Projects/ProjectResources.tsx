@@ -307,7 +307,7 @@ export default function ProjectResources({ project }: ProjectResourcesProps) {
 
   return (
     <section
-      className="min-w-0 rounded-2xl border border-border-light bg-surface-secondary p-4 sm:p-5"
+      className="flex h-full min-h-0 min-w-0 flex-col rounded-2xl border border-border-light bg-surface-secondary p-4 sm:p-5"
       aria-labelledby="project-resources-heading"
     >
       <div className="mb-3 flex items-center justify-between gap-2">
@@ -401,7 +401,7 @@ export default function ProjectResources({ project }: ProjectResourcesProps) {
       )}
       {!isError && !isLoading && (
         <div
-          className="h-48 space-y-2 overflow-y-auto"
+          className="min-h-0 flex-1 space-y-2 overflow-y-auto"
           role={uploading.length || projectFiles?.length ? 'list' : 'status'}
           aria-live="polite"
           aria-label={localize('com_ui_project_files')}
