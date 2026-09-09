@@ -34,6 +34,16 @@ test.describe('chat projects', () => {
   test('creates a project with full-width instructions when RAG is disabled', async ({ page }) => {
     test.setTimeout(60000);
     const name = uniqueName('E2E Project');
+    await page.route(
+      (url) => url.pathname === '/api/config',
+      async (route) => {
+        const response = await route.fetch();
+        await route.fulfill({
+          response,
+          json: { ...(await response.json()), ragEnabled: false },
+        });
+      },
+    );
 
     await createProject(page, name);
     await expect(page.getByRole('region', { name: 'Files', exact: true })).toHaveCount(0);

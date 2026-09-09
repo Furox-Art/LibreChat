@@ -4331,15 +4331,28 @@ describe('ResumableAgentController resume metadata', () => {
     );
   });
 
-  it.each(['submitted', 'persisted'])(
+  it.each(['submitted', 'persisted', 'loaded'])(
     'preserves %s workspace selections in the runtime envelope',
     async (source) => {
       mockGenerationJobManager.claimGeneration.mockResolvedValue(wonGenerationClaim());
       const initializeClient = jest.fn().mockRejectedValue(new Error('stop before tool loading'));
       const codeWorkspaces = [{ environmentId: 'machine-a', workspaceId: 'project-b' }];
+      const persistedConversation = {
+        conversationId: 'conversation-123',
+        user: 'user-123',
+        codeWorkspaces,
+      };
+      let resolveStoredConversation;
+      if (source === 'loaded') {
+        mockGetConvo.mockReturnValueOnce(
+          new Promise((resolve) => {
+            resolveStoredConversation = resolve;
+          }),
+        );
+      }
       const req = {
         user: { id: 'user-123' },
-        ...(source === 'persisted' ? { resolvedConversation: { codeWorkspaces } } : {}),
+        ...(source === 'persisted' ? { resolvedConversation: persistedConversation } : {}),
         body: {
           ...(source === 'submitted' ? { codeWorkspaces } : {}),
           text: 'Fresh submission.',
@@ -4359,7 +4372,12 @@ describe('ResumableAgentController resume metadata', () => {
         set: jest.fn(),
       };
 
-      await AgentController(req, res, jest.fn(), initializeClient, null);
+      const controllerPromise = AgentController(req, res, jest.fn(), initializeClient, null);
+      if (source === 'loaded') {
+        await nextTick();
+        resolveStoredConversation(persistedConversation);
+      }
+      await controllerPromise;
 
       expect(initializeClient).toHaveBeenCalledWith(
         expect.objectContaining({

@@ -1564,13 +1564,6 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
   ) {
     preallocatedResponseMessageId = crypto.randomUUID();
   }
-  const mcpRequestBody = createMCPRuntimeRequestBody({
-    messageId: preallocatedResponseMessageId,
-    conversationId: effectiveConversationId,
-    codeWorkspaces: req.body.codeWorkspaces ?? req.resolvedConversation?.codeWorkspaces,
-    parentMessageId:
-      editedContent != null ? preallocatedResponseMessageId : preallocatedUserMessageId,
-  });
 
   let client = null;
   let verifiedInitialAgentId = null;
@@ -1634,6 +1627,13 @@ const ResumableAgentController = async (req, res, next, initializeClient, addTit
         agents: [{ instructions: chatProjectContext.instructions }],
       });
     }
+    const mcpRequestBody = createMCPRuntimeRequestBody({
+      messageId: preallocatedResponseMessageId,
+      conversationId: effectiveConversationId,
+      codeWorkspaces: req.body.codeWorkspaces ?? req.resolvedConversation?.codeWorkspaces,
+      parentMessageId:
+        editedContent != null ? preallocatedResponseMessageId : preallocatedUserMessageId,
+    });
     logger.debug(`[ResumableAgentController] Creating job`, {
       streamId,
       conversationId,
