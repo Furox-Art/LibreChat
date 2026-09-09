@@ -1,8 +1,8 @@
-import { useDeferredValue, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Button, DropdownPopup, Skeleton } from '@librechat/client';
 import { Ellipsis, Folder, FolderPlus, Pencil, Trash2 } from 'lucide-react';
+import { Button, DropdownPopup, Skeleton, Spinner } from '@librechat/client';
 import type { TChatProject } from 'librechat-data-provider';
 import type { LocalizeFunction, MenuItemProps } from '~/common';
 import type { ProjectSort } from './ProjectsNavBar';
@@ -185,19 +185,21 @@ export default function ProjectsView() {
   const [sortBy, setSortBy] = useState<ProjectSort>('lastConversationAt');
   const [isCreating, setIsCreating] = useState(searchParams.get('new') === '1');
   const deferredSearch = useDeferredValue(search);
+  const scrollRef = useRef<HTMLElement | null>(null);
+  const [pageSentinel, setPageSentinel] = useState<HTMLDivElement | null>(null);
 
-  const { data, fetchNextPage, isFetchingNextPage, isLoading } = useProjectsInfiniteQuery({
-    search: deferredSearch || undefined,
-    sortBy,
-    sortDirection: sortBy === 'name' ? 'asc' : 'desc',
-  });
+  const { data, fetchNextPage, hasNextPage, isFetching, isFetchingNextPage, isLoading } =
+    useProjectsInfiniteQuery({
+      search: deferredSearch || undefined,
+      sortBy,
+      sortDirection: sortBy === 'name' ? 'asc' : 'desc',
+    });
 
   const projects = useMemo(() => data?.pages.flatMap((page) => page.projects) ?? [], [data?.pages]);
-  const hasNextPage = data?.pages[data.pages.length - 1]?.nextCursor != null;
 
   /** `projects` only holds the pages fetched so far, so while another page
    *  exists this is a lower bound rather than the total. */
-  const projectCountLabel = getProjectCountLabel(projects.length, hasNextPage, localize);
+  const projectCountLabel = getProjectCountLabel(projects.length, hasNextPage === true, localize);
 
   useEffect(() => {
     if (searchParams.get('new') === '1') {
@@ -214,8 +216,39 @@ export default function ProjectsView() {
     }
   };
 
+  const loadMore = useCallback(() => {
+    if (hasNextPage === true && !isFetching) {
+      /** `cancelRefetch: false` so a scroll burst coalesces into one request
+       *  instead of each intersection restarting the page in flight. */
+      void fetchNextPage({ cancelRefetch: false });
+    }
+  }, [fetchNextPage, hasNextPage, isFetching]);
+
+  /** The list scrolls inside `<main>`, so the viewport root would clip the
+   *  sentinel and only report it once it is already on screen; observing the
+   *  scroll container lets `rootMargin` prefetch a page ahead of the edge. */
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (pageSentinel == null || root == null) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          loadMore();
+        }
+      },
+      { root, rootMargin: '600px 0px' },
+    );
+    observer.observe(pageSentinel);
+    return () => observer.disconnect();
+  }, [loadMore, pageSentinel]);
+
   return (
-    <main className="flex h-full min-h-0 flex-col overflow-auto bg-presentation text-text-primary">
+    <main
+      ref={scrollRef}
+      className="flex h-full min-h-0 flex-col overflow-auto bg-presentation text-text-primary"
+    >
       <ProjectsNavBar
         onCreate={() => setIsCreating(true)}
         search={search}
@@ -283,15 +316,15 @@ export default function ProjectsView() {
         </div>
 
         {hasNextPage && (
-          <Button
-            type="button"
-            variant="outline"
-            className="mx-auto mt-8"
-            onClick={() => fetchNextPage()}
-            disabled={isFetchingNextPage}
+          <div
+            ref={setPageSentinel}
+            className="flex h-16 shrink-0 items-center justify-center"
+            role="status"
+            aria-live="polite"
+            aria-label={localize('com_ui_loading')}
           >
-            {isFetchingNextPage ? localize('com_ui_loading') : localize('com_ui_load_more')}
-          </Button>
+            {isFetchingNextPage ? <Spinner className="size-5 text-text-primary" /> : null}
+          </div>
         )}
       </div>
     </main>
